@@ -22,6 +22,9 @@ const (
 	eventsPath  = "/api/v1/events"
 	metricsPath = "/api/v1/metrics"
 	statusPath  = "/api/v1/status"
+	// encryptedPath replaces events and metrics when a project encryption
+	// key is configured (mirrors the Python _ENCRYPTED_ENDPOINTS target).
+	encryptedPath = "/api/v1/events/encrypted"
 )
 
 const (
@@ -70,6 +73,7 @@ type transport struct {
 	breaker   *CircuitBreaker
 	logger    *log.Logger
 	installID string
+	encryptor *PayloadEncryptor
 
 	requestsSent   atomic.Int64
 	requestsFailed atomic.Int64
@@ -92,11 +96,16 @@ func userAgent() string {
 	return "guard-agent-go/" + Version
 }
 
-// sendEvents posts one events batch. A 413 response recurses into the
-// split-or-drop path.
+// sendEvents posts one events batch. With a project encryption key
+// configured, the batch goes encrypted to /api/v1/events/encrypted and a
+// 413 drops durably (encrypted payloads cannot be split). Otherwise a 413
+// recurses into the split-or-drop path.
 func (t *transport) sendEvents(ctx context.Context, events []SecurityEvent) (sendOutcome, error) {
 	if len(events) == 0 {
 		return outcomeAccepted, nil
+	}
+	if t.encryptor != nil {
+		return t.sendEncryptedBatch(ctx, events, nil)
 	}
 	raw, err := t.marshalBatch(&eventBatch{
 		ProjectID:        t.projectIDOrDefault(),
@@ -119,11 +128,14 @@ func (t *transport) sendEvents(ctx context.Context, events []SecurityEvent) (sen
 	return outcome, err
 }
 
-// sendMetrics posts one metrics batch. A 413 response recurses into the
-// split-or-drop path.
+// sendMetrics posts one metrics batch. Encrypted-mode handling matches
+// sendEvents.
 func (t *transport) sendMetrics(ctx context.Context, metrics []SecurityMetric) (sendOutcome, error) {
 	if len(metrics) == 0 {
 		return outcomeAccepted, nil
+	}
+	if t.encryptor != nil {
+		return t.sendEncryptedBatch(ctx, nil, metrics)
 	}
 	raw, err := t.marshalBatch(&eventBatch{
 		ProjectID:        t.projectIDOrDefault(),
@@ -144,6 +156,92 @@ func (t *transport) sendMetrics(ctx context.Context, metrics []SecurityMetric) (
 		return t.splitOrDropMetrics(ctx, metrics), nil
 	}
 	return outcome, err
+}
+
+// encryptedEnvelope is the wire payload for
+// POST /api/v1/events/encrypted, mirroring the Python _post_encrypted:
+// only the events/metrics arrays travel inside the ciphertext; batch_id
+// and the version fields stay in clear.
+type encryptedEnvelope struct {
+	EncryptedPayload string `json:"encrypted_payload"`
+	BatchID          string `json:"batch_id"`
+	AgentVersion     string `json:"agent_version"`
+	GuardVersion     string `json:"guard_version,omitempty"`
+	GuardCoreVersion string `json:"guard_core_version,omitempty"`
+}
+
+// sendEncryptedBatch encrypts the events/metrics arrays with AES-256-GCM
+// and POSTs the Python-shaped envelope. Serialization or encryption
+// failure retains the batch (requeue); a 413 drops durably because an
+// encrypted payload cannot be split.
+func (t *transport) sendEncryptedBatch(
+	ctx context.Context, events []SecurityEvent, metrics []SecurityMetric,
+) (sendOutcome, error) {
+	plaintext, err := canonicalItemsJSON(events, metrics)
+	if err != nil {
+		t.logger.Printf("guardagent: serialization failed for encrypted batch, retaining batch: %v", err)
+		return outcomePartial, err
+	}
+	encryptedPayload, encErr := t.encryptor.Encrypt(plaintext, "")
+	if encErr != nil {
+		t.logger.Printf("guardagent: encryption failed for batch, retaining batch: %v", encErr)
+		return outcomePartial, encErr
+	}
+	envelope, err := json.Marshal(encryptedEnvelope{
+		EncryptedPayload: encryptedPayload,
+		BatchID:          newBatchID(),
+		AgentVersion:     Version,
+		GuardVersion:     t.cfg.GuardVersion,
+		GuardCoreVersion: t.cfg.GuardCoreVersion,
+	})
+	if err != nil {
+		t.logger.Printf("guardagent: serialization failed for encrypted envelope, retaining batch: %v", err)
+		return outcomePartial, err
+	}
+	outcome, err := t.sendBatch(ctx, encryptedPath, envelope, true)
+	var tooLarge *payloadTooLargeError
+	if errors.As(err, &tooLarge) {
+		t.logger.Printf("guardagent: encrypted batch exceeds the ingestion payload limit; dropping durably")
+		t.requestsFailed.Add(1)
+		return outcomePermanent, nil
+	}
+	return outcome, err
+}
+
+// canonicalItemsJSON serializes only the events/metrics arrays into the
+// exact bytes Python json.dumps(..., sort_keys=True) emits. Items are
+// round-tripped through a UseNumber decoder so integer fields stay
+// integers on the canonical plaintext.
+func canonicalItemsJSON(events []SecurityEvent, metrics []SecurityMetric) (map[string]any, error) {
+	decodeGeneric := func(raw []byte) (any, error) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	}
+	payload := map[string]any{"events": []any{}, "metrics": []any{}}
+	if len(events) > 0 {
+		raw, err := json.Marshal(events)
+		if err != nil {
+			return nil, err
+		}
+		if payload["events"], err = decodeGeneric(raw); err != nil {
+			return nil, err
+		}
+	}
+	if len(metrics) > 0 {
+		raw, err := json.Marshal(metrics)
+		if err != nil {
+			return nil, err
+		}
+		if payload["metrics"], err = decodeGeneric(raw); err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
 }
 
 // sendStatus posts the periodic status report. Status is fire-and-forget:
