@@ -655,6 +655,11 @@ documented defaults.</p>
 <td>empty</td>
 <td>HMAC-SHA256 secret over the uncompressed body</td>
 </tr>
+<tr>
+<td><code>SensitiveHeaders</code></td>
+<td>defaults</td>
+<td>Header names redacted from metadata/tags; nil = defaults, non-nil replaces</td>
+</tr>
 </tbody>
 </table>
 <p>With <code>WithHTTPClient</code> you can supply a custom <code>*http.Client</code> (proxies, mTLS,
