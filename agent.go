@@ -281,6 +281,7 @@ func (a *Agent) SendEvent(ctx context.Context, ev SecurityEvent) (err error) {
 	if ev.IdempotencyKey == "" {
 		ev.IdempotencyKey = newUUID4()
 	}
+	ev = redactEventMetadata(ev, a.cfg.SensitiveHeaders)
 	return a.enqueueEvent(ctx, ev)
 }
 
@@ -300,6 +301,7 @@ func (a *Agent) SendMetric(ctx context.Context, m SecurityMetric) (err error) {
 	if m.Timestamp.IsZero() {
 		m.Timestamp = time.Now().UTC()
 	}
+	m = redactMetricTags(m, a.cfg.SensitiveHeaders)
 	return a.enqueueMetric(ctx, m)
 }
 

@@ -126,6 +126,7 @@ Start from `guardagent.DefaultConfig()` and override. `RetryAttempts` and `Compr
 | `BackoffFactor` | 1.0 | Seconds, base of `2^attempt` |
 | `CompressionEnabled` / `CompressionThreshold` | true / 1024 | gzip at or above the threshold |
 | `SigningSecret` | empty | Enables `X-Payload-Signature` |
+| `SensitiveHeaders` | defaults | Header names redacted from event metadata and metric tags (case-insensitive); nil = defaults, non-nil replaces |
 | `InstallID` / `InstallIDPath` | auto / `~/.guard-agent/install-id` | Override either |
 | `Redis` | nil | `URL`, `Prefix` (`guard:agent`), `TTL` (1h) |
 | `GuardVersion` / `GuardCoreVersion` | empty | Reported to the API |

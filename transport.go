@@ -199,8 +199,11 @@ func (t *transport) splitOrDropMetrics(ctx context.Context, metrics []SecurityMe
 }
 
 // marshalBatch serializes a batch and marks the compressed flag truthfully
-// (the flag is informational on the server).
+// (the flag is informational on the server). Every outgoing batch body is
+// redacted again at serialization time, mirroring the Python transport's
+// second redaction pass.
 func (t *transport) marshalBatch(batch *eventBatch) ([]byte, error) {
+	redactBatch(batch, t.cfg.SensitiveHeaders)
 	raw, err := json.Marshal(batch)
 	if err != nil {
 		return nil, err

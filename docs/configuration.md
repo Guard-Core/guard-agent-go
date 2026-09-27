@@ -41,6 +41,7 @@ documented defaults.
 | `CompressionEnabled` | true | Gzip bodies at or above the threshold |
 | `CompressionThreshold` | 1024 | Gzip cutoff in bytes |
 | `SigningSecret` | empty | HMAC-SHA256 secret over the uncompressed body |
+| `SensitiveHeaders` | defaults | Header names redacted from metadata/tags; nil = defaults, non-nil replaces |
 
 With `WithHTTPClient` you can supply a custom `*http.Client` (proxies, mTLS,
 custom TLS pools); the agent only overrides its timeout when `Timeout` is set.
