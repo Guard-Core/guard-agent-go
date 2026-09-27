@@ -106,6 +106,10 @@ The ingestion API verifies `X-Payload-Signature` **after** its gzip middleware d
 
 The Python and TypeScript agents sign the post-compression wire bytes instead, so their signatures stop verifying as soon as gzip kicks in. That mismatch is a known defect on their side; this agent intentionally does not reproduce it, and the test suite asserts the server-side semantic with a mock that decompresses first and verifies second.
 
+### Dynamic rules
+
+`GetDynamicRules(ctx)` fetches the SaaS rule document from `GET /api/v1/rules` (the full Python-agent `DynamicRules` surface) and caches it for the document's `ttl`; a failed poll serves the last known rules. `Start` runs a background polling loop on `DynamicRuleInterval`, and `Stats().RulesFetched` counts refreshes. `TruncatePayload`, `HashIP`, and `KnownEventTypes` round out the host-adapter helper surface.
+
 ## Configuration
 
 Start from `guardagent.DefaultConfig()` and override. `RetryAttempts` and `CompressionThreshold` are zero-honest (0 means zero retries, and 0 compresses every body); the feature booleans are false in a hand-built `Config{}`.
@@ -118,6 +122,7 @@ Start from `guardagent.DefaultConfig()` and override. `RetryAttempts` and `Compr
 | `BufferSize` | 100 | Per-kind capacity |
 | `FlushInterval` | 30s | Flush cadence and backoff base |
 | `StatusInterval` | 300s | Minimum 60s |
+| `DynamicRuleInterval` | 300s | Dynamic rules polling cadence, minimum 60s |
 | `HighWatermarkRatio` | 0.8 | Early flush threshold |
 | `MaxConcurrentFlushes` | 1 | Wake-driven flushers |
 | `Overflow` | `drop` | `drop`, `block`, `raise` |
@@ -127,6 +132,8 @@ Start from `guardagent.DefaultConfig()` and override. `RetryAttempts` and `Compr
 | `CompressionEnabled` / `CompressionThreshold` | true / 1024 | gzip at or above the threshold |
 | `SigningSecret` | empty | Enables `X-Payload-Signature` |
 | `SensitiveHeaders` | defaults | Header names redacted from event metadata and metric tags (case-insensitive); nil = defaults, non-nil replaces |
+| `MaxPayloadSize` | 1024 | Payload size (bytes) to truncate at with `TruncatePayload` before embedding in event metadata |
+| `OnError` | nil | Best-effort failure callback `(stage, err, context)`; stages: `transport_send`, `encryption`, `flush_events`, `flush_metrics` |
 | `InstallID` / `InstallIDPath` | auto / `~/.guard-agent/install-id` | Override either |
 | `Redis` | nil | `URL`, `Prefix` (`guard:agent`), `TTL` (1h) |
 | `GuardVersion` / `GuardCoreVersion` | empty | Reported to the API |

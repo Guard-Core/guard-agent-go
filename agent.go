@@ -87,6 +87,9 @@ type Stats struct {
 	StatusReportsSent   int64
 	StatusReportsFailed int64
 
+	// RulesFetched counts successful dynamic rules refreshes.
+	RulesFetched int64
+
 	RequestsSent   int64
 	RequestsFailed int64
 
@@ -138,6 +141,10 @@ type Agent struct {
 	metricGate   time.Time
 	lastFlush    time.Time
 	lastErrors   []string
+
+	rulesFetched    int64
+	cachedRules     *DynamicRules
+	rulesLastUpdate time.Time
 
 	started   bool
 	closed    bool
@@ -231,16 +238,18 @@ func (a *Agent) Start(ctx context.Context) (err error) {
 	if a.persist != nil {
 		a.reloadFromRedisLocked(a.ctx)
 	}
-	// One ticker loop, one status loop, and MaxConcurrentFlushes
-	// wake-driven flushers; all spawned once here so no dynamic goroutine
-	// registration can race with Stop's WaitGroup wait.
+	// One ticker loop, one status loop, one rules loop, and
+	// MaxConcurrentFlushes wake-driven flushers; all spawned once here so
+	// no dynamic goroutine registration can race with Stop's WaitGroup
+	// wait.
 	flushers := max(1, a.cfg.MaxConcurrentFlushes)
-	a.wg.Add(2 + flushers)
+	a.wg.Add(3 + flushers)
 	go a.autoFlushLoop()
 	for i := 0; i < flushers; i++ {
 		go a.wakeFlushLoop()
 	}
 	go a.statusLoop()
+	go a.rulesLoop()
 	return nil
 }
 
@@ -398,6 +407,7 @@ func (a *Agent) Stats() (s Stats) {
 	s.DurabilityDegraded = a.persist != nil && a.redisPersistFailures > 0
 	s.StatusReportsSent = a.statusSent
 	s.StatusReportsFailed = a.statusFailed
+	s.RulesFetched = a.rulesFetched
 	s.RequestsSent = a.tr.requestsSent.Load()
 	s.RequestsFailed = a.tr.requestsFailed.Load()
 	s.CircuitState = a.tr.breaker.State()
@@ -762,6 +772,7 @@ func (a *Agent) settleEvents(drained []bufferedEvent, keys []string, outcome sen
 		a.recordErrorLocked(fmt.Sprintf("%d event(s) permanently rejected by ingestion API", len(drained)))
 		a.mu.Unlock()
 		a.logger.Printf("guardagent: %d event(s) permanently rejected by ingestion API; dropped durably", len(drained))
+		fireErrorHook(a.cfg.OnError, a.logger, StageTransportSend, err, map[string]any{"data_type": "events", "item_count": len(drained)})
 		return nil
 	default:
 		a.mu.Lock()
@@ -778,6 +789,7 @@ func (a *Agent) settleEvents(drained []bufferedEvent, keys []string, outcome sen
 		if err == nil {
 			err = errors.New("guardagent: event flush failed")
 		}
+		fireErrorHook(a.cfg.OnError, a.logger, StageFlushEvents, err, map[string]any{"batch_size": len(drained)})
 		return err
 	}
 }
@@ -802,6 +814,7 @@ func (a *Agent) settleMetrics(drained []bufferedMetric, keys []string, outcome s
 		a.recordErrorLocked(fmt.Sprintf("%d metric(s) permanently rejected by ingestion API", len(drained)))
 		a.mu.Unlock()
 		a.logger.Printf("guardagent: %d metric(s) permanently rejected by ingestion API; dropped durably", len(drained))
+		fireErrorHook(a.cfg.OnError, a.logger, StageTransportSend, err, map[string]any{"data_type": "metrics", "item_count": len(drained)})
 		return nil
 	default:
 		a.mu.Lock()
@@ -818,6 +831,7 @@ func (a *Agent) settleMetrics(drained []bufferedMetric, keys []string, outcome s
 		if err == nil {
 			err = errors.New("guardagent: metric flush failed")
 		}
+		fireErrorHook(a.cfg.OnError, a.logger, StageFlushMetrics, err, map[string]any{"batch_size": len(drained)})
 		return err
 	}
 }

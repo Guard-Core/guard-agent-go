@@ -45,6 +45,64 @@ func validMetricType(t string) bool {
 	return ok
 }
 
+// KnownEventTypes lists every event type the guard ecosystem emits,
+// mirroring guard_agent.models.KNOWN_EVENT_TYPES (39 entries, including
+// the user_agent_blocked and decorator_violation renames and the
+// security_headers_applied and csp_violation tails). It is documentation,
+// not validation: like the Python agent, SendEvent accepts any non-empty
+// event type so new engine events cannot be dropped at the consumer.
+var KnownEventTypes = []string{
+	"ip_banned",
+	"ip_unbanned",
+	"ip_blocked",
+	"ip_ban_failed",
+	"rate_limited",
+	"rate_limit_script_reloaded",
+	"suspicious_request",
+	"cloud_blocked",
+	"country_blocked",
+	"penetration_attempt",
+	"behavioral_violation",
+	"user_agent_blocked",
+	"custom_request_check",
+	"decorator_violation",
+	"decoding_error",
+	"detection_engine_callback_error",
+	"geo_lookup_failed",
+	"https_enforced",
+	"pattern_anomaly_slow_execution",
+	"pattern_anomaly_timeout",
+	"pattern_anomaly_statistical_anomaly",
+	"redis_connection",
+	"redis_error",
+	"dynamic_rule_applied",
+	"dynamic_rule_updated",
+	"path_excluded",
+	"route_unresolved",
+	"pattern_detected",
+	"pattern_added",
+	"pattern_removed",
+	"access_denied",
+	"authentication_failed",
+	"content_filtered",
+	"emergency_mode_activated",
+	"emergency_mode_block",
+	"dynamic_rule_violation",
+	"security_bypass",
+	"security_headers_applied",
+	"csp_violation",
+}
+
+// IsKnownEventType reports whether event_type is in KnownEventTypes.
+func IsKnownEventType(eventType string) bool {
+	for _, known := range KnownEventTypes {
+		if known == eventType {
+			return true
+		}
+	}
+	return false
+}
+
 // SecurityEvent is one security telemetry event. The JSON shape matches
 // guard_agent.models.SecurityEvent field for field; the ingestion API
 // requires timestamp and event_type and allows extra fields.

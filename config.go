@@ -25,8 +25,11 @@ const (
 	defaultCompressThresh   = 1024
 	defaultRedisPrefix      = "guard:agent"
 	defaultPersistTTL       = 3600 * time.Second
+	defaultMaxPayloadSize   = 1024
 	minAPIKeyLength         = 10
 	minStatusInterval       = 60 * time.Second
+	minDynamicRuleInterval  = 60 * time.Second
+	defaultRuleInterval     = 300 * time.Second
 	apiVersionPathSuffix    = "/api/v1"
 	apiVersionSuffixWarning = "endpoint ends with /api/v1; the agent appends API paths itself, so the suffix was removed"
 )
@@ -89,6 +92,10 @@ type Config struct {
 	// StatusInterval is the status reporting cadence, minimum 60s,
 	// default 300s.
 	StatusInterval time.Duration
+	// DynamicRuleInterval is the SaaS dynamic rules polling cadence,
+	// minimum 60s, default 300s. The fetched document carries its own TTL
+	// that gates re-fetches inside GetDynamicRules.
+	DynamicRuleInterval time.Duration
 	// HighWatermarkRatio triggers an early flush once the combined buffer
 	// occupancy reaches ratio * BufferSize; default 0.8.
 	HighWatermarkRatio float64
@@ -137,6 +144,21 @@ type Config struct {
 	// serialization, mirroring the Python agent.
 	SensitiveHeaders []string
 
+	// MaxPayloadSize is the maximum payload size (in bytes) a host
+	// adapter should embed in an event before truncating it with
+	// TruncatePayload; default 1024. The agent itself never truncates
+	// caller-provided payloads, mirroring the Python agent where the
+	// config knob pairs with the exported truncate_payload helper.
+	MaxPayloadSize int
+
+	// OnError is an optional best-effort failure callback invoked when a
+	// transport, encryption, or flush step fails. The first argument is
+	// the stage, one of the Stage* constants (transport_send, encryption,
+	// flush_events, flush_metrics); the second is the error; the third is
+	// a small context map. A callback that panics is recovered and logged,
+	// never propagated, mirroring the Python agent's fire_error_hook.
+	OnError func(stage string, err error, context map[string]any)
+
 	// InstallID overrides the persisted install id.
 	InstallID string
 	// InstallIDPath overrides the install id state file, default
@@ -173,6 +195,8 @@ func DefaultConfig() Config {
 		CompressionEnabled:   true,
 		CompressionThreshold: defaultCompressThresh,
 		SensitiveHeaders:     nil, // nil means DefaultSensitiveHeaders.
+		MaxPayloadSize:       defaultMaxPayloadSize,
+		DynamicRuleInterval:  defaultRuleInterval,
 	}
 }
 
@@ -242,6 +266,12 @@ func normalize(cfg Config) (Config, []string, error) {
 		problems = append(problems, "status interval must be at least 60s")
 	}
 
+	if cfg.DynamicRuleInterval == 0 {
+		cfg.DynamicRuleInterval = defaultRuleInterval
+	} else if cfg.DynamicRuleInterval < minDynamicRuleInterval {
+		problems = append(problems, "dynamic rule interval must be at least 60s")
+	}
+
 	if cfg.HighWatermarkRatio == 0 {
 		cfg.HighWatermarkRatio = defaultHighWatermark
 	} else if cfg.HighWatermarkRatio < 0 || cfg.HighWatermarkRatio > 1 {
@@ -286,6 +316,12 @@ func normalize(cfg Config) (Config, []string, error) {
 	// is NOT default-filled. DefaultConfig sets 1024.
 	if cfg.CompressionThreshold < 0 {
 		problems = append(problems, "compression threshold must be 0 or greater")
+	}
+
+	if cfg.MaxPayloadSize == 0 {
+		cfg.MaxPayloadSize = defaultMaxPayloadSize
+	} else if cfg.MaxPayloadSize < 0 {
+		problems = append(problems, "max payload size must be greater than 0")
 	}
 
 	cfg.SensitiveHeaders = normalizeSensitiveHeaders(cfg.SensitiveHeaders)
