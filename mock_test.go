@@ -68,6 +68,17 @@ func (m *mockIngest) handle(w http.ResponseWriter, r *http.Request) {
 		Compressed: compressed,
 	}
 	switch r.URL.Path {
+	case encryptedPath:
+		var envelope struct {
+			EncryptedPayload string `json:"encrypted_payload"`
+			BatchID          string `json:"batch_id"`
+			AgentVersion     string `json:"agent_version"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		call.BatchID = envelope.BatchID
 	case eventsPath, metricsPath:
 		var batch eventBatch
 		if err := json.Unmarshal(body, &batch); err != nil {

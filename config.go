@@ -121,6 +121,14 @@ type Config struct {
 	// sent. The HMAC-SHA256 signature covers the uncompressed JSON body.
 	SigningSecret string
 
+	// ProjectEncryptionKey is the project-specific AES-256 key
+	// (urlsafe-base64-encoded, from the core backend). When set, event and
+	// metric batches are encrypted and posted to
+	// /api/v1/events/encrypted; an invalid key or a failed round-trip
+	// verification fails construction (no plaintext fallback), mirroring
+	// the Python agent.
+	ProjectEncryptionKey string
+
 	// SensitiveHeaders lists header names whose values are redacted from
 	// event metadata and metric tags. Matching is case-insensitive after
 	// trimming whitespace. A nil list means DefaultSensitiveHeaders; a

@@ -173,6 +173,19 @@ func New(cfg Config, opts ...Option) (*Agent, error) {
 		o.logger.Printf("guardagent: %s", w)
 	}
 	installID := resolveInstallID(normalized.InstallID, normalized.InstallIDPath, o.logger)
+
+	// Fail-closed encryption init (mirrors
+	// _transport_lifecycle._init_encryption): when a key is configured, an
+	// invalid key or a failed round-trip verification aborts construction;
+	// plaintext fallback is forbidden.
+	encryptor, encErr := CreateEncryptor(normalized.ProjectEncryptionKey)
+	if encErr != nil {
+		return nil, &EncryptionConfigError{"Encryption round-trip failed at startup; refusing plaintext fallback"}
+	}
+	if encryptor != nil && !encryptor.VerifyKey() {
+		return nil, &EncryptionConfigError{"Encryption round-trip failed at startup; refusing plaintext fallback"}
+	}
+
 	var p *persistence
 	if normalized.Redis != nil {
 		p, err = newPersistence(normalized.Redis, o.logger)
@@ -191,6 +204,7 @@ func New(cfg Config, opts ...Option) (*Agent, error) {
 		confirmCh:   make(chan []string, 64),
 		workerDone:  make(chan struct{}),
 	}
+	a.tr.encryptor = encryptor
 	if a.persist != nil {
 		go a.confirmWorker()
 	}
