@@ -402,10 +402,43 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#encrypted-ingest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Encrypted ingest
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#redis-persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
         Redis persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Helpers
       
     </span>
   </a>
@@ -491,10 +524,43 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#encrypted-ingest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Encrypted ingest
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#redis-persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
         Redis persistence
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helpers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Helpers
       
     </span>
   </a>
@@ -599,6 +665,11 @@ documented defaults.</p>
 <td>Combined occupancy that triggers an early flush</td>
 </tr>
 <tr>
+<td><code>DynamicRuleInterval</code></td>
+<td>300s</td>
+<td>SaaS dynamic rules polling cadence, minimum 60s; a background loop started by <code>Start</code></td>
+</tr>
+<tr>
 <td><code>MaxConcurrentFlushes</code></td>
 <td>1</td>
 <td>In-flight flush cycle bound</td>
@@ -656,14 +727,36 @@ documented defaults.</p>
 <td>HMAC-SHA256 secret over the uncompressed body</td>
 </tr>
 <tr>
+<td><code>ProjectEncryptionKey</code></td>
+<td>empty</td>
+<td>AES-256 key (urlsafe base64, from the core backend); enables encrypted ingest</td>
+</tr>
+<tr>
 <td><code>SensitiveHeaders</code></td>
 <td>defaults</td>
 <td>Header names redacted from metadata/tags; nil = defaults, non-nil replaces</td>
+</tr>
+<tr>
+<td><code>MaxPayloadSize</code></td>
+<td>1024</td>
+<td>Payload size (bytes) a host adapter should truncate at with <code>TruncatePayload</code></td>
+</tr>
+<tr>
+<td><code>OnError</code></td>
+<td>nil</td>
+<td>Best-effort failure callback <code>(stage, err, context)</code>; stages are <code>transport_send</code>, <code>encryption</code>, <code>flush_events</code>, <code>flush_metrics</code></td>
 </tr>
 </tbody>
 </table>
 <p>With <code>WithHTTPClient</code> you can supply a custom <code>*http.Client</code> (proxies, mTLS,
 custom TLS pools); the agent only overrides its timeout when <code>Timeout</code> is set.</p>
+<h2 id="encrypted-ingest">Encrypted ingest</h2>
+<p>When <code>ProjectEncryptionKey</code> is set, event and metric batches are serialized
+to the canonical Python JSON bytes, encrypted with AES-256-GCM (fresh 12-byte
+nonce per batch), and posted to <code>/api/v1/events/encrypted</code> in the Python
+envelope; status reports stay plaintext. An invalid key or a failed round-trip
+verification fails construction: there is no plaintext fallback. A 413 on the
+encrypted path drops durably because an encrypted payload cannot be split.</p>
 <h2 id="redis-persistence">Redis persistence</h2>
 <div class="highlight"><pre><span></span><code><span class="nx">cfg</span><span class="p">.</span><span class="nx">Redis</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">guardagent</span><span class="p">.</span><span class="nx">RedisConfig</span><span class="p">{</span>
 <span class="w">    </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">"GUARD_AGENT_REDIS_URL"</span><span class="p">),</span><span class="w"> </span><span class="c1">// redis:// or rediss://</span>
@@ -673,6 +766,28 @@ custom TLS pools); the agent only overrides its timeout when <code>Timeout</code
 <p>Keys are <code>{Prefix}:{namespace}:{short-key}</code> with namespaces <code>agent_events</code>
 and <code>agent_metrics</code>. Persistence is optional; without it, a process crash
 loses buffered-but-unsent items.</p>
+<h2 id="dynamic-rules">Dynamic rules</h2>
+<p><code>GetDynamicRules(ctx)</code> returns the SaaS rule document from <code>GET /api/v1/rules</code>
+as a <code>*guardagent.DynamicRules</code> (the full Python-agent surface: IP lists,
+ban duration, countries, rate limits, cloud providers, user agents,
+suspicious patterns, feature toggles, emergency mode). Results are cached in
+memory for the document's <code>ttl</code> seconds; a failed poll serves the last known
+rules instead of surfacing the error, mirroring the Python agent. <code>Start</code>
+runs a background polling loop on <code>DynamicRuleInterval</code>; <code>Stats().RulesFetched</code>
+counts successful refreshes. Outgoing rules polls share the batch-send retry
+machinery: the local rate limiter, the circuit breaker, capped Retry-After on
+429, and exponential backoff.</p>
+<h2 id="helpers">Helpers</h2>
+<ul>
+<li><code>guardagent.TruncatePayload(payload, maxSize)</code> truncates with a visible
+  <code>...[TRUNCATED]</code> marker; pair it with <code>MaxPayloadSize</code> before embedding a
+  request payload in event metadata.</li>
+<li><code>guardagent.HashIP(ip, salt)</code> returns the first 16 hex characters of
+  SHA-256 over <code>ip+salt</code> for privacy-conscious telemetry.</li>
+<li><code>guardagent.KnownEventTypes</code> / <code>guardagent.IsKnownEventType</code> document the
+  39 event types the ecosystem emits. They are documentation, not
+  validation: <code>SendEvent</code> accepts any non-empty event type.</li>
+</ul>
 
 
 
