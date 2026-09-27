@@ -121,6 +121,14 @@ type Config struct {
 	// sent. The HMAC-SHA256 signature covers the uncompressed JSON body.
 	SigningSecret string
 
+	// SensitiveHeaders lists header names whose values are redacted from
+	// event metadata and metric tags. Matching is case-insensitive after
+	// trimming whitespace. A nil list means DefaultSensitiveHeaders; a
+	// non-nil list (including empty) replaces the defaults. Redaction
+	// runs twice, at capture (SendEvent/SendMetric) and again at batch
+	// serialization, mirroring the Python agent.
+	SensitiveHeaders []string
+
 	// InstallID overrides the persisted install id.
 	InstallID string
 	// InstallIDPath overrides the install id state file, default
@@ -156,6 +164,7 @@ func DefaultConfig() Config {
 		BackoffFactor:        defaultBackoffFactor,
 		CompressionEnabled:   true,
 		CompressionThreshold: defaultCompressThresh,
+		SensitiveHeaders:     nil, // nil means DefaultSensitiveHeaders.
 	}
 }
 
@@ -270,6 +279,8 @@ func normalize(cfg Config) (Config, []string, error) {
 	if cfg.CompressionThreshold < 0 {
 		problems = append(problems, "compression threshold must be 0 or greater")
 	}
+
+	cfg.SensitiveHeaders = normalizeSensitiveHeaders(cfg.SensitiveHeaders)
 
 	if cfg.InstallIDPath == "" {
 		cfg.InstallIDPath = defaultInstallIDPath()
