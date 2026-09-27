@@ -3,6 +3,27 @@ Release Notes
 
 ___
 
+v3.1.0 (2026-09-27)
+-------------------
+
+Parity release: the 3.0.2 to 3.1.0 agent feature set (v3.1.0)
+-------------------------------------------------------------
+
+### Added
+
+- **AES-256-GCM encrypted ingest.** Batches can now be encrypted end to end before they leave the host, matching the Python agent's encrypted ingest contract.
+- **Recursive sensitive-header redaction.** Authorization, cookie, and set-cookie style headers (and their nested occurrences) are redacted before a payload is built.
+- **Dynamic rules.** The agent can pull rule updates from the ingestion API and apply them to the local runtime without a restart.
+- **Local rate limiters.** Token-bucket style local limiting protects the host from event floods before anything is buffered or shipped.
+- **`on_error` and `max_payload` configuration knobs.** Operators choose the failure behavior (log and continue versus surface the error) and cap the serialized payload size.
+
+### Changed
+
+- **`version.go` is bumped to 3.1.0** so the reported `agent_version` and the User-Agent match the release tag; `make bump-version` updates `version.go` and this changelog.
+- **Parity tests** (`parity_test.go`) pin the new 3.1.0 surface against the reference Python agent behavior.
+
+___
+
 v3.0.2 (2026-09-24)
 -------------------
 

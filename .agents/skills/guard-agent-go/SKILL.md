@@ -5,7 +5,7 @@ description: Use when adding telemetry reporting to a Go service or Go Guard ada
 
 # guard-agent-go
 
-Go telemetry agent for the [Guard ecosystem](https://github.com/rennf93/guard-core). Ships security events, metrics, and agent status to the Guard Core App ingestion API with at-least-once delivery. It contains no security-detection logic: engines and adapters produce the events, the agent ships them. Module: `github.com/rennf93/guard-agent-go` (package `guardagent`), Go `1.25.0`, released at `v3.0.2`.
+Go telemetry agent for the [Guard ecosystem](https://github.com/rennf93/guard-core). Ships security events, metrics, and agent status to the Guard Core App ingestion API with at-least-once delivery. It contains no security-detection logic: engines and adapters produce the events, the agent ships them. Module: `github.com/rennf93/guard-agent-go` (package `guardagent`), Go `1.25.0`, released at `v3.1.0`.
 
 ## Quick Reference
 
@@ -27,10 +27,10 @@ Ingestion contract: `POST /api/v1/events`, `/api/v1/metrics`, `/api/v1/status` w
 
 ## Installation
 
-Released: `v3.0.2` on the Go module proxy:
+Released: `v3.1.0` on the Go module proxy:
 
 ```sh
-go get github.com/rennf93/guard-agent-go/v3@v3.0.2
+go get github.com/rennf93/guard-agent-go/v3@v3.1.0
 ```
 
 ## Setup

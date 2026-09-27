@@ -8,7 +8,7 @@ The agent contains no detection logic. Guard engines and their adapters produce 
 
 ## Status
 
-Released. Version `v3.0.2` is tagged and published to the Go module proxy; releases are cut as `v*` git tags.
+Released. Version `v3.1.0` is tagged and published to the Go module proxy; releases are cut as `v*` git tags.
 
 ## Features
 
@@ -24,7 +24,7 @@ Released. Version `v3.0.2` is tagged and published to the Go module proxy; relea
 ## Install
 
 ```sh
-go get github.com/rennf93/guard-agent-go/v3@v3.0.2
+go get github.com/rennf93/guard-agent-go/v3@v3.1.0
 ```
 
 Package name is `guardagent`; the module is `github.com/rennf93/guard-agent-go/v3`.
