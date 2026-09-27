@@ -71,6 +71,7 @@ type transport struct {
 	cfg       Config
 	client    *http.Client
 	breaker   *CircuitBreaker
+	limiter   *RateLimiter
 	logger    *log.Logger
 	installID string
 	encryptor *PayloadEncryptor
@@ -87,9 +88,34 @@ func newTransport(cfg Config, installID string, client *http.Client, logger *log
 		cfg:       cfg,
 		client:    client,
 		breaker:   newCircuitBreaker(),
+		limiter:   newRateLimiter(defaultLimiterMaxCalls, defaultLimiterWindow),
 		logger:    logger,
 		installID: installID,
 	}
+}
+
+// fireHook routes a stage failure to the user's on_error callback.
+func (t *transport) fireHook(stage string, err error, context map[string]any) {
+	fireErrorHook(t.cfg.OnError, t.logger, stage, err, context)
+}
+
+// limiterGate mirrors the Python _send_with_retry/_get_with_retry pre-check:
+// acquire a local rate limiter slot before every attempt; when denied, wait
+// the suggested interval and burn an attempt, exactly like the Python
+// `continue` inside the attempts loop.
+func (t *transport) limiterGate(ctx context.Context, attempt int, what string) (bool, error) {
+	if t.limiter.Acquire() {
+		return true, nil
+	}
+	wait := t.limiter.RetryAfter()
+	t.logger.Printf("guardagent: local rate limit exceeded, waiting %s before %s", wait.Round(time.Millisecond), what)
+	if !sleepCtx(ctx, wait) {
+		return false, ctx.Err()
+	}
+	if attempt >= t.cfg.RetryAttempts {
+		return false, fmt.Errorf("guardagent: local rate limit prevented %s", what)
+	}
+	return false, nil
 }
 
 func userAgent() string {
@@ -118,12 +144,16 @@ func (t *transport) sendEvents(ctx context.Context, events []SecurityEvent) (sen
 	})
 	if err != nil {
 		t.logger.Printf("guardagent: serialization failed for event batch, retaining batch: %v", err)
+		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": eventsPath, "data_type": "events"})
 		return outcomePartial, err
 	}
 	outcome, err := t.sendBatch(ctx, eventsPath, raw, true)
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
 		return t.splitOrDropEvents(ctx, events), nil
+	}
+	if outcome == outcomeFailed && err != nil {
+		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": eventsPath, "data_type": "events"})
 	}
 	return outcome, err
 }
@@ -148,12 +178,16 @@ func (t *transport) sendMetrics(ctx context.Context, metrics []SecurityMetric) (
 	})
 	if err != nil {
 		t.logger.Printf("guardagent: serialization failed for metric batch, retaining batch: %v", err)
+		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": metricsPath, "data_type": "metrics"})
 		return outcomePartial, err
 	}
 	outcome, err := t.sendBatch(ctx, metricsPath, raw, true)
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
 		return t.splitOrDropMetrics(ctx, metrics), nil
+	}
+	if outcome == outcomeFailed && err != nil {
+		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": metricsPath, "data_type": "metrics"})
 	}
 	return outcome, err
 }
@@ -180,11 +214,13 @@ func (t *transport) sendEncryptedBatch(
 	plaintext, err := canonicalItemsJSON(events, metrics)
 	if err != nil {
 		t.logger.Printf("guardagent: serialization failed for encrypted batch, retaining batch: %v", err)
+		t.fireHook(StageEncryption, err, map[string]any{"endpoint": encryptedPath})
 		return outcomePartial, err
 	}
 	encryptedPayload, encErr := t.encryptor.Encrypt(plaintext, "")
 	if encErr != nil {
 		t.logger.Printf("guardagent: encryption failed for batch, retaining batch: %v", encErr)
+		t.fireHook(StageEncryption, encErr, map[string]any{"endpoint": encryptedPath})
 		return outcomePartial, encErr
 	}
 	envelope, err := json.Marshal(encryptedEnvelope{
@@ -196,6 +232,7 @@ func (t *transport) sendEncryptedBatch(
 	})
 	if err != nil {
 		t.logger.Printf("guardagent: serialization failed for encrypted envelope, retaining batch: %v", err)
+		t.fireHook(StageEncryption, err, map[string]any{"endpoint": encryptedPath})
 		return outcomePartial, err
 	}
 	outcome, err := t.sendBatch(ctx, encryptedPath, envelope, true)
@@ -203,6 +240,7 @@ func (t *transport) sendEncryptedBatch(
 	if errors.As(err, &tooLarge) {
 		t.logger.Printf("guardagent: encrypted batch exceeds the ingestion payload limit; dropping durably")
 		t.requestsFailed.Add(1)
+		t.fireHook(StageTransportSend, tooLarge, map[string]any{"endpoint": encryptedPath})
 		return outcomePermanent, nil
 	}
 	return outcome, err
@@ -270,6 +308,7 @@ func (t *transport) splitOrDropEvents(ctx context.Context, events []SecurityEven
 	if len(events) <= 1 {
 		t.logger.Printf("guardagent: single event still exceeds the ingestion payload limit; dropping durably")
 		t.requestsFailed.Add(1)
+		t.fireHook(StageTransportSend, &payloadTooLargeError{detail: "singleton event exceeds the payload limit"}, map[string]any{"data_type": "events", "item_count": len(events)})
 		return outcomePermanent
 	}
 	mid := len(events) / 2
@@ -285,6 +324,7 @@ func (t *transport) splitOrDropMetrics(ctx context.Context, metrics []SecurityMe
 	if len(metrics) <= 1 {
 		t.logger.Printf("guardagent: single metric still exceeds the ingestion payload limit; dropping durably")
 		t.requestsFailed.Add(1)
+		t.fireHook(StageTransportSend, &payloadTooLargeError{detail: "singleton metric exceeds the payload limit"}, map[string]any{"data_type": "metrics", "item_count": len(metrics)})
 		return outcomePermanent
 	}
 	mid := len(metrics) / 2
@@ -353,6 +393,12 @@ func (t *transport) sendBatch(ctx context.Context, path string, raw []byte, eval
 		signature = signPayload(raw, t.cfg.SigningSecret)
 	}
 	for attempt := 0; ; attempt++ {
+		if allowed, gateErr := t.limiterGate(ctx, attempt, "batch send"); !allowed {
+			if gateErr != nil {
+				return outcomeFailed, gateErr
+			}
+			continue
+		}
 		if err := t.breaker.Admit(); err != nil {
 			return outcomeFailed, err
 		}

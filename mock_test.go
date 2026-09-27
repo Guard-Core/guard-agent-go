@@ -41,6 +41,8 @@ type mockIngest struct {
 	partialNext        bool
 	requireSignature   bool
 	signingSecret      string
+	rulesBody          string
+	rulesStatus        int
 }
 
 func newMockIngest(t interface {
@@ -95,6 +97,15 @@ func (m *mockIngest) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		call.Status = &st
+	case rulesPath:
+		call.Response = http.StatusOK
+		if m.rulesStatus != 0 {
+			call.Response = m.rulesStatus
+		}
+		m.calls = append(m.calls, call)
+		w.WriteHeader(call.Response)
+		_, _ = w.Write([]byte(m.rulesBody))
+		return
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -198,6 +209,12 @@ func (m *mockIngest) requireSignatures(secret string) {
 	m.mu.Lock()
 	m.requireSignature = true
 	m.signingSecret = secret
+	m.mu.Unlock()
+}
+func (m *mockIngest) serveRules(status int, body string) {
+	m.mu.Lock()
+	m.rulesStatus = status
+	m.rulesBody = body
 	m.mu.Unlock()
 }
 func (m *mockIngest) clearKnobs() {
