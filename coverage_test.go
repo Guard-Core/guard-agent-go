@@ -1211,10 +1211,14 @@ func TestTriggerFlushWakeWithoutBuffer(t *testing.T) {
 	if err := agent.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// A wake with an empty buffer is a no-op.
+	// A wake with an empty buffer is a no-op (exercised directly so the
+	// empty-buffer branch is deterministic).
+	agent.flushIfNeeded()
+	// A saturated wake channel drops the token instead of blocking.
+	agent.flushWake <- struct{}{}
 	agent.triggerFlush()
 	// A wake for a non-watermark buffer defers to the elapsed-time gate,
-	// which is armed by the fresh lastFlush.
+	// which fires because the recorded last flush is two hours old.
 	if err := agent.SendEvent(ctx, testEvent(1, "")); err != nil {
 		t.Fatalf("SendEvent: %v", err)
 	}
