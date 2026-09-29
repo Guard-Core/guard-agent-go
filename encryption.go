@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -55,14 +54,11 @@ func NewPayloadEncryptor(projectKey string) (*PayloadEncryptor, error) {
 		return nil, &EncryptionError{fmt.Sprintf(
 			"Invalid key size: %d bytes, expected %d", len(decoded), encryptionKeySize)}
 	}
-	block, err := aes.NewCipher(decoded)
-	if err != nil {
-		return nil, &EncryptionError{fmt.Sprintf("Invalid project key format: %v", err)}
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, &EncryptionError{fmt.Sprintf("Invalid project key format: %v", err)}
-	}
+	// A validated 32-byte AES key and an AES block cipher cannot fail here;
+	// the constructor errors of aes.NewCipher and cipher.NewGCM are only
+	// reachable with rejected key sizes.
+	block, _ := aes.NewCipher(decoded)
+	aead, _ := cipher.NewGCM(block)
 	return &PayloadEncryptor{aead: aead}, nil
 }
 
@@ -71,7 +67,7 @@ func NewPayloadEncryptor(projectKey string) (*PayloadEncryptor, error) {
 func (p *PayloadEncryptor) Encrypt(data map[string]any, associatedData string) (string, error) {
 	plaintext := canonicalJSON(data)
 	nonce := make([]byte, encryptionNonceSize)
-	if _, err := rand.Read(nonce); err != nil {
+	if _, err := cryptoRandRead(nonce); err != nil {
 		return "", &EncryptionError{fmt.Sprintf("Failed to encrypt payload: %v", err)}
 	}
 	var aad []byte

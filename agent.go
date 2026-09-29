@@ -426,18 +426,24 @@ func (a *Agent) autoFlushLoop() {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := a.Flush(a.ctx); err != nil {
-				consecutive++
-				if consecutive < 3 {
-					a.logger.Printf("guardagent: periodic flush failed: %v", err)
-				} else {
-					a.logger.Printf("guardagent: periodic flush failing repeatedly (%d in a row): %v", consecutive, err)
-				}
-			} else {
-				consecutive = 0
-			}
+			consecutive = a.flushTick(consecutive)
 		}
 	}
+}
+
+// flushTick runs one periodic flush and returns the updated consecutive
+// failure count, escalating the log line once failures persist.
+func (a *Agent) flushTick(consecutive int) int {
+	if err := a.Flush(a.ctx); err != nil {
+		consecutive++
+		if consecutive < 3 {
+			a.logger.Printf("guardagent: periodic flush failed: %v", err)
+		} else {
+			a.logger.Printf("guardagent: periodic flush failing repeatedly (%d in a row): %v", consecutive, err)
+		}
+		return consecutive
+	}
+	return 0
 }
 
 // wakeFlushLoop performs watermark-triggered early flushes. One of
@@ -601,12 +607,10 @@ func (a *Agent) reserveMetricKeyLocked(m SecurityMetric) string {
 	if a.persist == nil {
 		return ""
 	}
-	data, err := json.Marshal(m)
-	if err != nil {
-		a.redisPersistFailures++
-		a.recordErrorLocked(fmt.Sprintf("metric serialization for persistence failed: %v", err))
-		return ""
-	}
+	// SecurityMetric is JSON-serializable by construction (scalar and
+	// string-map fields only), so unlike events its serialization cannot
+	// fail; only the persistence write can.
+	data, _ := json.Marshal(m)
 	return a.persistItemLocked(persistNamespaceMetrics, "metric", data)
 }
 
