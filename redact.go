@@ -124,12 +124,10 @@ func sanitizeStringStringMap(
 			sanitized[key] = redactedMarker
 			continue
 		}
-		sanitizedValue := sanitizeValue(item, loweredSensitive, depth+1)
-		if s, ok := sanitizedValue.(string); ok {
-			sanitized[key] = s
-			continue
-		}
-		sanitized[key] = fmt.Sprintf("%v", sanitizedValue)
+		// sanitizeValue on a string input always yields a string (scalars
+		// pass through, JSON candidates re-serialize, everything else is
+		// the redaction marker), so the result formats back to itself.
+		sanitized[key] = fmt.Sprintf("%v", sanitizeValue(item, loweredSensitive, depth+1))
 	}
 	return sanitized
 }
@@ -154,10 +152,9 @@ func sanitizeStringValue(
 		return value
 	}
 	sanitized := sanitizeValue(parsed, loweredSensitive, depth+1)
-	encoded, err := json.Marshal(sanitized)
-	if err != nil {
-		return value
-	}
+	// sanitized only contains JSON-representable values (it was decoded
+	// from JSON and re-walked), so re-encoding cannot fail.
+	encoded, _ := json.Marshal(sanitized)
 	return string(encoded)
 }
 
@@ -168,11 +165,8 @@ func redactEventMetadata(ev SecurityEvent, sensitiveHeaders []string) SecurityEv
 	if ev.Metadata == nil {
 		return ev
 	}
-	redacted, ok := SanitizeHeaders(ev.Metadata, sensitiveHeaders).(map[string]any)
-	if !ok {
-		return ev
-	}
-	ev.Metadata = redacted
+	// A map input always sanitizes back to a map.
+	ev.Metadata = SanitizeHeaders(ev.Metadata, sensitiveHeaders).(map[string]any)
 	return ev
 }
 
@@ -182,11 +176,8 @@ func redactMetricTags(m SecurityMetric, sensitiveHeaders []string) SecurityMetri
 	if m.Tags == nil {
 		return m
 	}
-	redacted, ok := SanitizeHeaders(m.Tags, sensitiveHeaders).(map[string]string)
-	if !ok {
-		return m
-	}
-	m.Tags = redacted
+	// A string-map input always sanitizes back to a string map.
+	m.Tags = SanitizeHeaders(m.Tags, sensitiveHeaders).(map[string]string)
 	return m
 }
 

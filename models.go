@@ -175,10 +175,15 @@ type batchResponse struct {
 // ever fails, so identifier generation can never panic or return "".
 var uuidFallbackCounter atomic.Uint64
 
+// cryptoRandRead is the entropy source for identifiers and encryption
+// nonces. It is a variable so tests can exercise the fail-open fallback
+// paths deterministically; production code always uses crypto/rand.Read.
+var cryptoRandRead = rand.Read
+
 // newUUID4 returns a random RFC 4122 version 4 UUID string.
 func newUUID4() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := cryptoRandRead(b[:]); err != nil {
 		binary.BigEndian.PutUint64(b[0:8], uint64(time.Now().UnixNano()))
 		binary.BigEndian.PutUint64(b[8:16], uuidFallbackCounter.Add(1))
 	}
@@ -190,7 +195,7 @@ func newUUID4() string {
 // randomHex returns n random bytes as hex.
 func randomHex(n int) string {
 	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
+	if _, err := cryptoRandRead(buf); err != nil {
 		return fmt.Sprintf("%0*x", n*2, uuidFallbackCounter.Add(1))
 	}
 	return hex.EncodeToString(buf)

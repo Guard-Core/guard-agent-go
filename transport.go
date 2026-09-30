@@ -118,6 +118,23 @@ func (t *transport) limiterGate(ctx context.Context, attempt int, what string) (
 	return false, nil
 }
 
+// Test seams: package variables so tests can deterministically exercise
+// the defensive serialization/compression failure paths. Production always
+// uses the real json.Marshal, decoder, and gzip writer.
+var (
+	jsonMarshal       = json.Marshal
+	newGzipWriter     = gzip.NewWriter
+	decodeGenericJSON = func(raw []byte) (any, error) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	}
+)
+
 func userAgent() string {
 	return "guard-agent-go/" + Version
 }
@@ -223,7 +240,7 @@ func (t *transport) sendEncryptedBatch(
 		t.fireHook(StageEncryption, encErr, map[string]any{"endpoint": encryptedPath})
 		return outcomePartial, encErr
 	}
-	envelope, err := json.Marshal(encryptedEnvelope{
+	envelope, err := jsonMarshal(encryptedEnvelope{
 		EncryptedPayload: encryptedPayload,
 		BatchID:          newBatchID(),
 		AgentVersion:     Version,
@@ -251,31 +268,22 @@ func (t *transport) sendEncryptedBatch(
 // round-tripped through a UseNumber decoder so integer fields stay
 // integers on the canonical plaintext.
 func canonicalItemsJSON(events []SecurityEvent, metrics []SecurityMetric) (map[string]any, error) {
-	decodeGeneric := func(raw []byte) (any, error) {
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.UseNumber()
-		var value any
-		if err := decoder.Decode(&value); err != nil {
-			return nil, err
-		}
-		return value, nil
-	}
 	payload := map[string]any{"events": []any{}, "metrics": []any{}}
 	if len(events) > 0 {
-		raw, err := json.Marshal(events)
+		raw, err := jsonMarshal(events)
 		if err != nil {
 			return nil, err
 		}
-		if payload["events"], err = decodeGeneric(raw); err != nil {
+		if payload["events"], err = decodeGenericJSON(raw); err != nil {
 			return nil, err
 		}
 	}
 	if len(metrics) > 0 {
-		raw, err := json.Marshal(metrics)
+		raw, err := jsonMarshal(metrics)
 		if err != nil {
 			return nil, err
 		}
-		if payload["metrics"], err = decodeGeneric(raw); err != nil {
+		if payload["metrics"], err = decodeGenericJSON(raw); err != nil {
 			return nil, err
 		}
 	}
@@ -342,13 +350,13 @@ func (t *transport) splitOrDropMetrics(ctx context.Context, metrics []SecurityMe
 // second redaction pass.
 func (t *transport) marshalBatch(batch *eventBatch) ([]byte, error) {
 	redactBatch(batch, t.cfg.SensitiveHeaders)
-	raw, err := json.Marshal(batch)
+	raw, err := jsonMarshal(batch)
 	if err != nil {
 		return nil, err
 	}
 	if t.willCompress(len(raw)) {
 		batch.Compressed = true
-		raw, err = json.Marshal(batch)
+		raw, err = jsonMarshal(batch)
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +365,7 @@ func (t *transport) marshalBatch(batch *eventBatch) ([]byte, error) {
 }
 
 func (t *transport) marshalStatus(payload agentStatusPayload) ([]byte, error) {
-	raw, err := json.Marshal(payload)
+	raw, err := jsonMarshal(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +494,7 @@ func (t *transport) encodeBody(raw []byte) ([]byte, string) {
 		return raw, ""
 	}
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	gz := newGzipWriter(&buf)
 	if _, err := gz.Write(raw); err != nil {
 		t.logger.Printf("guardagent: gzip compression failed, sending uncompressed: %v", err)
 		return raw, ""
