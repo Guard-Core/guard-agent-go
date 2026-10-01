@@ -3,6 +3,23 @@ Release Notes
 
 ___
 
+v3.2.0 (2026-10-01)
+-------------------
+
+The 4.3.0-train artifact: coverage-gate hardening and the engine 4.3.0 floor (v3.2.0)
+-------------------------------------------------------------------------------------
+
+### Added
+
+- **The 100% line coverage gate is enforced fail-closed** (guard-agent-go #19, #20, #21). The gate now aborts on a missing or empty coverage profile instead of passing silently, the wake-flush coverage branches are deterministic rather than timing-dependent, and the agent surface is covered to the full line floor with real inputs.
+- **The process scaffold** (guard-agent-go #20): the family CI conventions - issue-link, labeler, scheduled lint, dependabot grouping - and the community health files.
+
+### Changed
+
+- **The engine floor moves to `github.com/rennf93/guard-core-go/v4 v4.3.0`** (the 4.3.0 train): the agent consumes the engine release that carries the corpus runners, the event-surface closures and the manager-level geo verdicts.
+
+___
+
 v3.1.0 (2026-09-27)
 -------------------
 
