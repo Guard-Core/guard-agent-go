@@ -3,6 +3,26 @@ Release Notes
 
 ___
 
+v3.2.1 (2026-10-07)
+-------------------
+
+The family lockstep artifact: the 3.2.1 wave tag (v3.2.1)
+----------------------------------------------------------
+
+### About this release
+
+- **An empty lockstep release for the Guard agent family 3.2.1 wave.** No shipped change: no `guardagent` code, dependency, or behavior delta since 3.2.0. The tag exists so the family stays version-aligned while the TypeScript port ships the wave's only runtime fix (the js/polynomial-redos endpoint normalization hardening, guard-agent-ts 3.2.1).
+
+### Changed
+
+- **Version only.** `version.go` moves to 3.2.1 (the `agent_version` the agent reports to the ingestion API). The engine floor stays at `github.com/rennf93/guard-core-go/v4 v4.3.0`.
+
+### Compatibility
+
+- **Drop-in.** Consumers on 3.2.0 can move to 3.2.1 with no code or config changes; the module path and the engine floor are unchanged.
+
+___
+
 v3.2.0 (2026-10-01)
 -------------------
 
