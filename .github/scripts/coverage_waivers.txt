@@ -1,0 +1,4 @@
+# utils.go:94 - ValidateConfig's non-ConfigError arm: normalize's only
+# error type is *ConfigError (config.go), so errors.As always matches and
+# the fallback append is defensive.
+utils.go:94
