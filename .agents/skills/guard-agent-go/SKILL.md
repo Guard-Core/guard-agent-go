@@ -5,7 +5,7 @@ description: Use when adding telemetry reporting to a Go service or Go Guard ada
 
 # guard-agent-go
 
-Go telemetry agent for the [Guard ecosystem](https://github.com/rennf93/guard-core). Ships security events, metrics, and agent status to the Guard Core App ingestion API with at-least-once delivery. It contains no security-detection logic: engines and adapters produce the events, the agent ships them. Module: `github.com/rennf93/guard-agent-go` (package `guardagent`), Go `1.25.0`, released at `v3.1.0`.
+Go telemetry agent for the [Guard ecosystem](https://github.com/Guard-Core/guard-core). Ships security events, metrics, and agent status to the Guard Core App ingestion API with at-least-once delivery. It contains no security-detection logic: engines and adapters produce the events, the agent ships them. Module: `github.com/rennf93/guard-agent-go` (package `guardagent`), Go `1.25.0`, released at `v3.1.0`.
 
 ## Quick Reference
 
@@ -80,7 +80,7 @@ cfg.SigningSecret = os.Getenv("INGEST_PAYLOAD_SIGNING_SECRET")
 
 ## Related Projects
 
-- [guard-core](https://github.com/rennf93/guard-core) and [guard-core-go](https://github.com/rennf93/guard-core-go): the engines that anchor the ecosystem.
-- [guard-agent](https://github.com/rennf93/guard-agent) (Python) and [guard-agent-rs](https://github.com/rennf93/guard-agent-rs) (Rust): the sibling agents this one mirrors.
-- [guard-core-app](https://github.com/rennf93/guard-core-app): hosts the ingestion API.
-- [gin-guard](https://github.com/rennf93/gin-guard) and [nethttp-guard](https://github.com/rennf93/nethttp-guard): Go adapters that emit the events.
+- [guard-core](https://github.com/Guard-Core/guard-core) and [guard-core-go](https://github.com/Guard-Core/guard-core-go): the engines that anchor the ecosystem.
+- [guard-agent](https://github.com/Guard-Core/guard-agent) (Python) and [guard-agent-rs](https://github.com/Guard-Core/guard-agent-rs) (Rust): the sibling agents this one mirrors.
+- [guard-core-app](https://github.com/Guard-Core/guard-core-app): hosts the ingestion API.
+- [gin-guard](https://github.com/Guard-Core/gin-guard) and [nethttp-guard](https://github.com/Guard-Core/nethttp-guard): Go adapters that emit the events.
