@@ -414,6 +414,58 @@ func (a *Agent) Stats() (s Stats) {
 	return s
 }
 
+// AgentStats renders the reference get_stats dict shape (guard_agent
+// _client_status.py get_stats, with buffer.py and
+// _transport_lifecycle.py get_stats as the nested stats blocks) for the
+// engine's middleware agent_stats merge (guardcore's AgentStatsProvider
+// seam). Every key carries the same value as the typed Stats/Status
+// snapshots; the reference's per-loop consecutive-failure counters
+// (loop_failures) and last_status_push_ok have no tracked counterpart in
+// this port and are omitted.
+func (a *Agent) AgentStats() map[string]any {
+	stats := a.Stats()
+	a.mu.Lock()
+	running := a.started && !a.closed
+	uptime := 0.0
+	if running {
+		uptime = time.Since(a.startedAt).Seconds()
+	}
+	cachedRules := a.cachedRules != nil
+	var rulesLastUpdate any
+	if !a.rulesLastUpdate.IsZero() {
+		rulesLastUpdate = a.rulesLastUpdate.UTC().Format(time.RFC3339)
+	}
+	a.mu.Unlock()
+	return map[string]any{
+		"running":        running,
+		"uptime":         uptime,
+		"events_sent":    stats.EventsSent,
+		"metrics_sent":   stats.MetricsSent,
+		"events_failed":  stats.EventsFailed,
+		"metrics_failed": stats.MetricsFailed,
+		"rules_fetched":  stats.RulesFetched,
+		"buffer_stats": map[string]any{
+			"events_buffered":            stats.EventsBuffered,
+			"metrics_buffered":           stats.MetricsBuffered,
+			"events_flushed":             stats.EventsFlushed,
+			"metrics_flushed":            stats.MetricsFlushed,
+			"events_dropped":             stats.EventsDropped,
+			"metrics_dropped":            stats.MetricsDropped,
+			"current_event_buffer_size":  stats.EventsPending,
+			"current_metric_buffer_size": stats.MetricsPending,
+			"redis_persist_failures":     stats.RedisPersistFailures,
+			"durability_degraded":        stats.DurabilityDegraded,
+		},
+		"transport_stats": map[string]any{
+			"requests_sent":         stats.RequestsSent,
+			"requests_failed":       stats.RequestsFailed,
+			"circuit_breaker_state": stats.CircuitState,
+		},
+		"cached_rules":      cachedRules,
+		"rules_last_update": rulesLastUpdate,
+	}
+}
+
 // ------------------------------------------------------------- loops --
 
 func (a *Agent) autoFlushLoop() {
