@@ -166,9 +166,9 @@ On hosts without a Go toolchain, run the same commands in Docker: `docker run --
 
 ## Related Projects
 
-- [guard-core](https://github.com/rennf93/guard-core): the framework-agnostic Python engine that anchors the ecosystem.
-- [guard-core-go](https://github.com/rennf93/guard-core-go): the Go engine whose adapters emit the telemetry this agent ships.
-- [guard-agent](https://github.com/rennf93/guard-agent): the Python reference agent; this repo mirrors its reliability semantics.
-- [guard-agent-rs](https://github.com/rennf93/guard-agent-rs): the Rust sibling agent.
-- [gin-guard](https://github.com/rennf93/gin-guard) and [nethttp-guard](https://github.com/rennf93/nethttp-guard): Go adapters that produce the events.
-- [guard-core-app](https://github.com/rennf93/guard-core-app): hosts the ingestion API this agent reports to.
+- [guard-core](https://github.com/Guard-Core/guard-core): the framework-agnostic Python engine that anchors the ecosystem.
+- [guard-core-go](https://github.com/Guard-Core/guard-core-go): the Go engine whose adapters emit the telemetry this agent ships.
+- [guard-agent](https://github.com/Guard-Core/guard-agent): the Python reference agent; this repo mirrors its reliability semantics.
+- [guard-agent-rs](https://github.com/Guard-Core/guard-agent-rs): the Rust sibling agent.
+- [gin-guard](https://github.com/Guard-Core/gin-guard) and [nethttp-guard](https://github.com/Guard-Core/nethttp-guard): Go adapters that produce the events.
+- [guard-core-app](https://github.com/Guard-Core/guard-core-app): hosts the ingestion API this agent reports to.

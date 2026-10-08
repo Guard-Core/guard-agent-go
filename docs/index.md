@@ -4,10 +4,10 @@
 buffers security events, metrics, and status reports produced by your
 application (typically through a guard-core-go adapter's block hooks) and
 ships them to the
-[guard-core-app](https://github.com/rennf93/guard-core-app) ingestion API
+[guard-core-app](https://github.com/Guard-Core/guard-core-app) ingestion API
 with at-least-once delivery.
 
-It is a port of the normative [guard-agent](https://github.com/rennf93/guard-agent)
+It is a port of the normative [guard-agent](https://github.com/Guard-Core/guard-agent)
 (Python) semantics: per-kind buffers, periodic and watermark-driven flushes,
 overflow policies, retry with backoff, 413 batch split-or-drop, Retry-After
 honoring, a circuit breaker, optional Redis-backed queue persistence, and a
@@ -78,7 +78,7 @@ func main() {
 Most applications do not call the agent directly: guard-core-go adapters
 expose a block hook (for example `SecurityConfig.OnBlock`) where the event
 construction belongs. See
-[guard-core-go](https://github.com/rennf93/guard-core-go) for the engine and
+[guard-core-go](https://github.com/Guard-Core/guard-core-go) for the engine and
 the adapter repositories for wiring examples.
 
 ## What the agent guarantees

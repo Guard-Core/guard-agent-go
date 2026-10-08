@@ -1,10 +1,10 @@
 # guard-agent-go
 
-Go telemetry agent for the [Guard ecosystem](https://github.com/rennf93/guard-core). Buffers security events, metrics, and agent status locally and ships them to the Guard Core App ingestion API with at-least-once delivery: nothing acknowledged is lost, nothing unacknowledged is forgotten.
+Go telemetry agent for the [Guard ecosystem](https://github.com/Guard-Core/guard-core). Buffers security events, metrics, and agent status locally and ships them to the Guard Core App ingestion API with at-least-once delivery: nothing acknowledged is lost, nothing unacknowledged is forgotten.
 
-Docs: <https://rennf93.github.io/guard-agent-go/>
+Docs: <https://guard-core.github.io/guard-agent-go/>
 
-The agent contains no detection logic. Guard engines and their adapters produce the telemetry; this library transports it, with the same reliability semantics as the Python [guard-agent](https://github.com/rennf93/guard-agent) and its [Rust sibling](https://github.com/rennf93/guard-agent-rs).
+The agent contains no detection logic. Guard engines and their adapters produce the telemetry; this library transports it, with the same reliability semantics as the Python [guard-agent](https://github.com/Guard-Core/guard-agent) and its [Rust sibling](https://github.com/Guard-Core/guard-agent-rs).
 
 ## Status
 
@@ -153,10 +153,10 @@ The integration build skips itself when `REDIS_HOST` is unset. On hosts without 
 
 ## Links
 
-- [guard-core](https://github.com/rennf93/guard-core): the Python engine that anchors the ecosystem.
-- [guard-agent](https://github.com/rennf93/guard-agent) / [guard-agent-rs](https://github.com/rennf93/guard-agent-rs): Python and Rust sibling agents.
-- [guard-core-app](https://github.com/rennf93/guard-core-app): hosts the ingestion API.
-- [gin-guard](https://github.com/rennf93/gin-guard) / [nethttp-guard](https://github.com/rennf93/nethttp-guard): Go adapters that emit the events.
+- [guard-core](https://github.com/Guard-Core/guard-core): the Python engine that anchors the ecosystem.
+- [guard-agent](https://github.com/Guard-Core/guard-agent) / [guard-agent-rs](https://github.com/Guard-Core/guard-agent-rs): Python and Rust sibling agents.
+- [guard-core-app](https://github.com/Guard-Core/guard-core-app): hosts the ingestion API.
+- [gin-guard](https://github.com/Guard-Core/gin-guard) / [nethttp-guard](https://github.com/Guard-Core/nethttp-guard): Go adapters that emit the events.
 
 ## License
 
