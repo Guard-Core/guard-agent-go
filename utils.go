@@ -90,8 +90,6 @@ func ValidateConfig(cfg Config) []string {
 		var configErr *ConfigError
 		if errors.As(err, &configErr) {
 			problems = append(problems, configErr.Problems...)
-		} else {
-			problems = append(problems, err.Error())
 		}
 	}
 	problems = append(problems, warnings...)
