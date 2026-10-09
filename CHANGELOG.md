@@ -3,6 +3,27 @@ Release Notes
 
 ___
 
+v3.2.2 (2026-10-09)
+-------------------
+
+The family lockstep artifact: the sanitizer export surface, lockstep with guard-agent 3.2.2 (v3.2.2)
+-----------------------------------------------------------------------------------------------------
+
+### About this release
+
+- **Lockstep with guard-agent 3.2.2 on PyPI.** The Go agent ships the wave's runtime content (the sanitizer export surface) under the same version number the Python reference carries; `version.go` moves to 3.2.2, the `agent_version` the agent reports to the ingestion API.
+
+### Added
+
+- **The sanitizer export surface** (#25, the FEATURE_MATRIX_GO GAP 19 closure): the reference sanitizer family (`guard_agent/utils.py`) beyond `SanitizeHeaders`/`TruncatePayload`/`HashIP` exports onto the Go module: `GenerateBatchID` (the `{unix_millis}-{8 hex chars}` reference `generate_batch_id` shape, the internal `newBatchID` seam exported), `SummarizeResponseBody` (the whitespace-collapsing bounded single-line response-body summary with the original-length truncation note), `SafeJSONSerialize`/`SafeJSONDeserialize`/`SerializationError` (the compact-JSON transport serialization with the typed failure, and the object-only tolerant deserialization where a non-object payload or a parse failure returns nil), and `ValidateConfig` (the advisory config audit returning the normalize problems as a list of strings without mutating or applying defaults; construction-time normalize stays the fail-closed surface). The unrepresentable non-ConfigError fallback arm in `ValidateConfig` is dropped so the strict coverage gate stays at 100%.
+- **The `get_stats` dict view** (#26): `Agent.AgentStats` renders the reference `get_stats` dict shape (`_client_status.py get_stats` with the buffer and transport-lifecycle nested blocks), satisfying guardcore's `AgentStatsProvider` seam so the middleware `agent_stats` property merges it. Keys the Go agent tracks carry the same values as the typed `Stats` snapshot; the reference's per-loop consecutive-failure counters and `last_status_push_ok` have no tracked counterpart and are omitted.
+
+### Changed
+
+- **Dependencies**: `github.com/redis/go-redis/v9` to v9.23.0 (#27), the engine-family bump train (guard-core-go #67), carrying the x/sys v0.48.0 line that clears the stdlib-adjacent exposure; govulncheck stays clean.
+
+___
+
 v3.2.1 (2026-10-07)
 -------------------
 
