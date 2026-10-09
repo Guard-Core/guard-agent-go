@@ -83,13 +83,13 @@ func main() {
 	projectID := envOr("GUARD_AGENT_PROJECT_ID", "demo-project")
 
 	agent, err := guardagent.New(guardagent.Config{
-		APIKey:         envOr("GUARD_AGENT_API_KEY", "demo-api-key-12345"),
-		Endpoint:       endpoint,
-		ProjectID:      projectID,
-		SigningSecret:  os.Getenv("GUARD_AGENT_SIGNING_SECRET"),
-		BufferSize:     10,
-		FlushInterval:  5 * time.Second,
-		GuardVersion:   "demo",
+		APIKey:           envOr("GUARD_AGENT_API_KEY", "demo-api-key-12345"),
+		Endpoint:         endpoint,
+		ProjectID:        projectID,
+		SigningSecret:    os.Getenv("GUARD_AGENT_SIGNING_SECRET"),
+		BufferSize:       10,
+		FlushInterval:    5 * time.Second,
+		GuardVersion:     "demo",
 		GuardCoreVersion: "4.3.2",
 	})
 	if err != nil {
