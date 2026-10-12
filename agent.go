@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -178,6 +179,10 @@ func New(cfg Config, opts ...Option) (*Agent, error) {
 	}
 	for _, w := range warnings {
 		o.logger.Printf("guardagent: %s", w)
+	}
+	if normalized.GuardCoreVersion == "" {
+		info, _ := debug.ReadBuildInfo()
+		normalized.GuardCoreVersion = guardCoreVersionFromBuildInfo(info)
 	}
 	installID := resolveInstallID(normalized.InstallID, normalized.InstallIDPath, o.logger)
 
