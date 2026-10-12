@@ -3,6 +3,18 @@ Release Notes
 
 ___
 
+v3.2.3 (2026-10-12)
+-------------------
+
+Parity release, lockstep with the agent family at 3.2.3 (v3.2.3)
+-----------------------------------------------------------------
+
+### About this release
+
+- A parity release with no functional change: `version.go` moves to 3.2.3 so all five agents ship the same version.
+
+___
+
 v3.2.2 (2026-10-09)
 -------------------
 

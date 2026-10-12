@@ -143,7 +143,7 @@ ___
 
 ## Status
 
-Released. Version `v3.2.2` is tagged and published to the Go module proxy; releases are cut as `v*` git tags.
+Released. Version `v3.2.3` is tagged and published to the Go module proxy; releases are cut as `v*` git tags.
 
 ## Features
 
@@ -159,7 +159,7 @@ Released. Version `v3.2.2` is tagged and published to the Go module proxy; relea
 ## Install
 
 ```sh
-go get github.com/rennf93/guard-agent-go/v3@v3.2.2
+go get github.com/rennf93/guard-agent-go/v3@v3.2.3
 ```
 
 Package name is `guardagent`; the module is `github.com/rennf93/guard-agent-go/v3`.
