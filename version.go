@@ -9,7 +9,30 @@
 // treats every telemetry failure as a log line plus a counter bump.
 package guardagent
 
+import (
+	"runtime/debug"
+	"strings"
+)
+
 // Version is the semantic version of the guard-agent-go module. It is
 // reported to the ingestion API as agent_version and in the User-Agent
 // header. Releases are published as v-prefixed git tags.
 const Version = "3.2.3"
+
+const guardCoreModule = "github.com/rennf93/guard-core-go/v4"
+
+func guardCoreVersionFromBuildInfo(info *debug.BuildInfo) string {
+	if info == nil {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != guardCoreModule {
+			continue
+		}
+		if dep.Replace != nil && dep.Replace.Version != "" {
+			return strings.TrimPrefix(dep.Replace.Version, "v")
+		}
+		return strings.TrimPrefix(dep.Version, "v")
+	}
+	return ""
+}

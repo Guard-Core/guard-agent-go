@@ -6,12 +6,16 @@ ___
 v3.2.3 (2026-10-12)
 -------------------
 
-Parity release, lockstep with the agent family at 3.2.3 (v3.2.3)
------------------------------------------------------------------
+Core version reporting, lockstep with the agent family at 3.2.3 (v3.2.3)
+------------------------------------------------------------------------
 
 ### About this release
 
-- A parity release with no functional change: `version.go` moves to 3.2.3 so all five agents ship the same version.
+- `version.go` moves to 3.2.3 so all five agents ship the same version.
+
+### Changed
+
+- When `Config.GuardCoreVersion` is empty, the agent fills it at construction from the linked `github.com/rennf93/guard-core-go/v4` module version (build info, leading `v` stripped), so the Guard SaaS sees which core is running. A value set by the caller is left untouched; with no build info the field stays empty.
 
 ___
 
