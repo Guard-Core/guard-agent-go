@@ -181,9 +181,8 @@ func New(cfg Config, opts ...Option) (*Agent, error) {
 		o.logger.Printf("guardagent: %s", w)
 	}
 	if normalized.GuardCoreVersion == "" {
-		if info, ok := debug.ReadBuildInfo(); ok {
-			normalized.GuardCoreVersion = guardCoreVersionFromBuildInfo(info)
-		}
+		info, _ := debug.ReadBuildInfo()
+		normalized.GuardCoreVersion = guardCoreVersionFromBuildInfo(info)
 	}
 	installID := resolveInstallID(normalized.InstallID, normalized.InstallIDPath, o.logger)
 
