@@ -116,6 +116,7 @@ func TestIntegrationPersistsOnEnqueueWithTTL(t *testing.T) {
 			t.Fatalf("SendEvent %d: %v", i, err)
 		}
 	}
+	agent.persistWG.Wait()
 	keys := testKeys(t, client)
 	if len(keys) != 2 {
 		t.Fatalf("persisted keys got %d want 2", len(keys))
@@ -146,6 +147,7 @@ func TestIntegrationConfirmDeletesRecords(t *testing.T) {
 	if err := agent.SendMetric(ctx, testMetric(1)); err != nil {
 		t.Fatalf("SendMetric: %v", err)
 	}
+	agent.persistWG.Wait()
 	if len(testKeys(t, client)) != 1 {
 		t.Fatalf("expected one persisted metric record")
 	}

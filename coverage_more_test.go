@@ -439,8 +439,12 @@ func TestReserveKeysMarshalFailureCountsAndRecords(t *testing.T) {
 	agent.mu.Lock()
 	metricKey := agent.reserveMetricKeyLocked(SecurityMetric{MetricType: MetricRequestCount})
 	agent.mu.Unlock()
-	if metricKey != "" {
-		t.Fatal("a failing store must not reserve a metric key")
+	if metricKey == "" {
+		t.Fatal("the key is assigned up front; the write runs off the lock")
+	}
+	agent.persistWG.Wait()
+	if len(agent.inflight) != 0 {
+		t.Fatalf("a failed write must be forgotten: %v", agent.inflight)
 	}
 	if agent.Stats().RedisPersistFailures != 2 {
 		t.Fatalf("store failures must count, got %+v", agent.Stats())

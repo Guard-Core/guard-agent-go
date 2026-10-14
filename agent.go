@@ -163,6 +163,14 @@ type Agent struct {
 	confirmCh  chan []string
 	workerDone chan struct{}
 	stopOnce   sync.Once
+
+	// persistWG tracks the background Redis writes started by append, so
+	// SendEvent/SendMetric never wait on Redis and Stop can drain them.
+	persistWG sync.WaitGroup
+	// inflight holds keys whose Redis write has not finished. The value is
+	// true once the record was flushed or evicted before the write landed,
+	// so the writer deletes the key instead of leaving an orphan.
+	inflight map[string]bool
 }
 
 // New validates cfg (filling defaults), resolves the install id, and
@@ -192,10 +200,10 @@ func New(cfg Config, opts ...Option) (*Agent, error) {
 	// plaintext fallback is forbidden.
 	encryptor, encErr := CreateEncryptor(normalized.ProjectEncryptionKey)
 	if encErr != nil {
-		return nil, &EncryptionConfigError{"Encryption round-trip failed at startup; refusing plaintext fallback"}
+		return nil, &EncryptionConfigError{msg: "Encryption round-trip failed at startup; refusing plaintext fallback: " + encErr.Error(), cause: encErr}
 	}
 	if encryptor != nil && !encryptor.VerifyKey() {
-		return nil, &EncryptionConfigError{"Encryption round-trip failed at startup; refusing plaintext fallback"}
+		return nil, &EncryptionConfigError{msg: "Encryption round-trip failed at startup; refusing plaintext fallback"}
 	}
 
 	var p *persistence
@@ -278,6 +286,7 @@ func (a *Agent) Stop(ctx context.Context) (err error) {
 	errFlushE := a.flushEvents(ctx, true)
 	errFlushM := a.flushMetrics(ctx, true)
 	err = errors.Join(errFlushE, errFlushM)
+	a.drainPersists(ctx)
 	if a.persist != nil {
 		a.stopOnce.Do(func() { close(a.confirmCh) })
 		<-a.workerDone
@@ -624,10 +633,9 @@ func (a *Agent) enqueueMetric(ctx context.Context, m SecurityMetric) error {
 	}
 }
 
-// appendEventLocked appends under a held lock, persisting to Redis first
-// (persist-on-enqueue, mirroring the Python agent which awaits the write
-// while holding the buffer lock). It returns whether the combined
-// occupancy reached the high-watermark.
+// appendEventLocked appends under a held lock and starts the Redis write
+// on a background goroutine (never while holding the lock). It returns
+// whether the combined occupancy reached the high-watermark.
 func (a *Agent) appendEventLocked(ev SecurityEvent) bool {
 	key := a.reserveEventKeyLocked(ev)
 	a.events = append(a.events, bufferedEvent{ev: ev, key: key})
@@ -671,14 +679,51 @@ func (a *Agent) reserveMetricKeyLocked(m SecurityMetric) string {
 	return a.persistItemLocked(persistNamespaceMetrics, "metric", data)
 }
 
+// persistItemLocked assigns the record's key and starts the write on a
+// background goroutine tracked by persistWG. The WaitGroup Add happens
+// under a.mu, and Stop sets closed under a.mu before waiting, so Add can
+// never race Wait. After Stop the record is not persisted.
 func (a *Agent) persistItemLocked(namespace, kind string, data []byte) string {
-	short := shortKey(kind)
-	key := a.persist.fullKey(namespace, short)
-	if a.persist.store(key, string(data)) {
-		return key
+	if a.closed {
+		return ""
 	}
-	a.redisPersistFailures++
-	return ""
+	key := a.persist.fullKey(namespace, shortKey(kind))
+	if a.inflight == nil {
+		a.inflight = make(map[string]bool)
+	}
+	a.inflight[key] = false
+	a.persistWG.Add(1)
+	go a.persistWrite(key, string(data))
+	return key
+}
+
+// persistWrite performs one Redis write off the lock. On failure the key
+// is forgotten (a later delete of a never-written key is harmless). On
+// success, if the record was flushed or evicted while the write was in
+// flight, the key is deleted instead of being left to TTL expiry.
+func (a *Agent) persistWrite(key, value string) {
+	defer a.persistWG.Done()
+	ok := a.persist.store(key, value)
+	a.mu.Lock()
+	released := a.inflight[key]
+	delete(a.inflight, key)
+	if !ok {
+		a.redisPersistFailures++
+	}
+	a.mu.Unlock()
+	if ok && released {
+		a.persist.del([]string{key})
+	}
+}
+
+// drainPersists waits for pending background writes, bounded by ctx.
+func (a *Agent) drainPersists(ctx context.Context) {
+	done := make(chan struct{})
+	go func() { a.persistWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 func (a *Agent) logDrop(kind string, dropped int64) {
@@ -1070,6 +1115,13 @@ func (a *Agent) confirmKeys(keys []string) {
 	if a.persist == nil || len(keys) == 0 {
 		return
 	}
+	a.mu.Lock()
+	for _, k := range keys {
+		if _, pending := a.inflight[k]; pending {
+			a.inflight[k] = true
+		}
+	}
+	a.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			a.logger.Printf("guardagent: confirm worker unavailable, %d record(s) left to TTL expiry", len(keys))
