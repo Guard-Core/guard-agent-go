@@ -758,7 +758,8 @@ to the canonical Python JSON bytes, encrypted with AES-256-GCM (fresh 12-byte
 nonce per batch), and posted to <code>/api/v1/events/encrypted</code> in the Python
 envelope; status reports stay plaintext. An invalid key or a failed round-trip
 verification fails construction: there is no plaintext fallback. A 413 on the
-encrypted path drops durably because an encrypted payload cannot be split.</p>
+encrypted path halves the batch and encrypts each half separately, like the
+plaintext path; a singleton that still 413s is dropped durably.</p>
 <h2 id="redis-persistence">Redis persistence</h2>
 <div class="highlight"><pre><span></span><code><span class="nx">cfg</span><span class="p">.</span><span class="nx">Redis</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">guardagent</span><span class="p">.</span><span class="nx">RedisConfig</span><span class="p">{</span>
 <span class="w">    </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">"GUARD_AGENT_REDIS_URL"</span><span class="p">),</span><span class="w"> </span><span class="c1">// redis:// or rediss://</span>
