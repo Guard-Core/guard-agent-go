@@ -3,6 +3,18 @@ Release Notes
 
 ___
 
+v3.2.4 (2026-10-15)
+-------------------
+
+Redis persistence off the buffer lock (v3.2.4)
+----------------------------------------------
+
+### Fixed
+
+- `SendEvent` and `SendMetric` no longer wait on Redis: the key is assigned under the lock and the write runs on a tracked background goroutine, so a slow or failing Redis no longer delays event-emitting requests. `Stop` waits for pending writes, bounded by its context. In-flight writes are capped at `BufferSize` (shared by events and metrics): past the cap the record stays in memory only, counts toward `RedisPersistFailures`, and one warning is logged per degradation episode. A record flushed or evicted before its write lands has its key deleted instead of left to TTL, and a write whose record was gone before the goroutine started is skipped. The startup encryption error now wraps and reports its cause. Lockstep release with the agent family at 3.2.4.
+
+___
+
 v3.2.3 (2026-10-12)
 -------------------
 
