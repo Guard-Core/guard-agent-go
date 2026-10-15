@@ -10,10 +10,9 @@ import (
 // uncompressed JSON body, delivered as "v1=" plus the lowercase hex digest
 // in the X-Payload-Signature header. The server verifies the signature
 // after its gzip middleware decompresses the request, so the signature MUST
-// cover the uncompressed bytes even when the body travels gzipped. This
-// intentionally differs from the Python and TypeScript agents, which sign
-// the post-compression wire bytes and fail verification whenever gzip
-// kicks in.
+// cover the uncompressed bytes even when the body travels gzipped. The
+// Python agent does the same (_build_post_body in
+// guard_agent/_transport_dispatch.py signs the raw body, then gzips it).
 
 const (
 	signatureHeader = "X-Payload-Signature"

@@ -61,7 +61,7 @@ type Status struct {
 	LastFlush time.Time
 	// Errors holds the most recent failure messages, oldest first.
 	Errors []string
-	// CircuitState is "closed", "open", or "half_open".
+	// CircuitState is "CLOSED", "OPEN", or "HALF_OPEN".
 	CircuitState string
 }
 
@@ -101,7 +101,7 @@ type Stats struct {
 // ingestion API with at-least-once semantics. Construct with New; call
 // Start to begin the background flush and status loops (buffering works
 // before Start); call Stop to cancel the loops and attempt one final
-// forced flush.
+// flush (under the per-kind backoff gates).
 //
 // Failure isolation policy: no exported method ever panics; telemetry
 // failures are logged and counted and, where idiomatic, returned as errors
@@ -146,6 +146,12 @@ type Agent struct {
 	rulesFetched    int64
 	cachedRules     *DynamicRules
 	rulesLastUpdate time.Time
+
+	// flushLoopFailures counts consecutive crashed flush iterations (a send
+	// failure is not a crash: the reference flush_buffer swallows it).
+	flushLoopFailures int
+	// lastStatusPushOK is nil until the first status push.
+	lastStatusPushOK *bool
 
 	started   bool
 	closed    bool
@@ -254,23 +260,27 @@ func (a *Agent) Start(ctx context.Context) (err error) {
 	if a.persist != nil {
 		a.reloadFromRedisLocked(a.ctx)
 	}
-	// One ticker loop, one status loop, one rules loop, and
-	// MaxConcurrentFlushes wake-driven flushers; all spawned once here so
+	// One ticker loop, one status loop, one rules loop (only with a project
+	// id), and MaxConcurrentFlushes wake-driven flushers; all spawned once here so
 	// no dynamic goroutine registration can race with Stop's WaitGroup
 	// wait.
 	flushers := max(1, a.cfg.MaxConcurrentFlushes)
-	a.wg.Add(3 + flushers)
+	a.wg.Add(2 + flushers)
 	go a.autoFlushLoop()
 	for i := 0; i < flushers; i++ {
 		go a.wakeFlushLoop()
 	}
 	go a.statusLoop()
-	go a.rulesLoop()
+	// The rules loop needs a project id (client.py:128-129).
+	if a.cfg.ProjectID != "" {
+		a.wg.Add(1)
+		go a.rulesLoop()
+	}
 	return nil
 }
 
-// Stop cancels the background loops, attempts one final forced flush of
-// both kinds (bypassing the per-kind backoff gates), and releases
+// Stop cancels the background loops, attempts one final flush of both kinds
+// (under the per-kind backoff gates, like the reference), and releases
 // resources. It is idempotent and returns the final flush error, if any.
 func (a *Agent) Stop(ctx context.Context) (err error) {
 	defer recoverPanic(a.logger, "Stop", &err)
@@ -286,8 +296,8 @@ func (a *Agent) Stop(ctx context.Context) (err error) {
 		cancel()
 	}
 	a.wg.Wait()
-	errFlushE := a.flushEvents(ctx, true)
-	errFlushM := a.flushMetrics(ctx, true)
+	errFlushE := a.flushEvents(ctx)
+	errFlushM := a.flushMetrics(ctx)
 	err = errors.Join(errFlushE, errFlushM)
 	a.drainPersists(ctx)
 	if a.persist != nil {
@@ -354,8 +364,8 @@ func (a *Agent) Flush(ctx context.Context) (err error) {
 	if err := a.guardClosed(); err != nil {
 		return err
 	}
-	errE := a.flushEvents(ctx, false)
-	errM := a.flushMetrics(ctx, false)
+	errE := a.flushEvents(ctx)
+	errM := a.flushMetrics(ctx)
 	return errors.Join(errE, errM)
 }
 
@@ -396,8 +406,10 @@ func (a *Agent) Healthy() (ok bool) {
 	if float64(len(a.events)+len(a.metrics)) >= float64(a.cfg.BufferSize)*healthBufferRatio {
 		return false
 	}
-	total := a.eventsSent + a.eventsFailed
-	if total > 0 && float64(a.eventsFailed)/float64(total) > healthFailureRateMax {
+	// Events plus metrics, like the reference (_client_status.py:104-111).
+	failed := a.eventsFailed + a.metricsFailed
+	total := a.eventsSent + a.metricsSent + failed
+	if total > 0 && float64(failed)/float64(total) > healthFailureRateMax {
 		return false
 	}
 	return true
@@ -435,10 +447,10 @@ func (a *Agent) Stats() (s Stats) {
 // _client_status.py get_stats, with buffer.py and
 // _transport_lifecycle.py get_stats as the nested stats blocks) for the
 // engine's middleware agent_stats merge (guardcore's AgentStatsProvider
-// seam). Every key carries the same value as the typed Stats/Status
-// snapshots; the reference's per-loop consecutive-failure counters
-// (loop_failures) and last_status_push_ok have no tracked counterpart in
-// this port and are omitted.
+// seam). Every key of the reference is present: timestamps are float epoch
+// seconds (rules_last_update is 0 before the first fetch, last_flush_time is
+// nil before the first flush) and the breaker state is "CLOSED", "OPEN" or
+// "HALF_OPEN".
 func (a *Agent) AgentStats() map[string]any {
 	stats := a.Stats()
 	a.mu.Lock()
@@ -448,9 +460,18 @@ func (a *Agent) AgentStats() map[string]any {
 		uptime = time.Since(a.startedAt).Seconds()
 	}
 	cachedRules := a.cachedRules != nil
-	var rulesLastUpdate any
+	rulesLastUpdate := 0.0
 	if !a.rulesLastUpdate.IsZero() {
-		rulesLastUpdate = a.rulesLastUpdate.UTC().Format(time.RFC3339)
+		rulesLastUpdate = epochSeconds(a.rulesLastUpdate)
+	}
+	var lastFlushTime any
+	if !a.lastFlush.IsZero() {
+		lastFlushTime = epochSeconds(a.lastFlush)
+	}
+	flushFailures, statusFailures := a.flushLoopFailures, a.statusStreak
+	var lastStatusPushOK any
+	if a.lastStatusPushOK != nil {
+		lastStatusPushOK = *a.lastStatusPushOK
 	}
 	a.mu.Unlock()
 	return map[string]any{
@@ -472,14 +493,27 @@ func (a *Agent) AgentStats() map[string]any {
 			"current_metric_buffer_size": stats.MetricsPending,
 			"redis_persist_failures":     stats.RedisPersistFailures,
 			"durability_degraded":        stats.DurabilityDegraded,
+			"last_flush_time":            lastFlushTime,
+			"auto_flush_running":         running,
 		},
 		"transport_stats": map[string]any{
 			"requests_sent":         stats.RequestsSent,
 			"requests_failed":       stats.RequestsFailed,
+			"bytes_sent":            a.tr.bytesSent.Load(),
 			"circuit_breaker_state": stats.CircuitState,
+			"failure_count":         a.tr.breaker.FailureCount(),
+			"session_closed":        !running,
 		},
 		"cached_rules":      cachedRules,
 		"rules_last_update": rulesLastUpdate,
+		// The reference's rules loop never counts a fetch failure
+		// (get_dynamic_rules swallows them), so its counter stays 0.
+		"loop_failures": map[string]any{
+			"flush":  flushFailures,
+			"status": statusFailures,
+			"rules":  0,
+		},
+		"last_status_push_ok": lastStatusPushOK,
 	}
 }
 
@@ -503,7 +537,15 @@ func (a *Agent) autoFlushLoop() {
 // flushTick runs one periodic flush and returns the updated consecutive
 // failure count, escalating the log line once failures persist.
 func (a *Agent) flushTick(consecutive int) int {
-	if err := a.Flush(a.ctx); err != nil {
+	err := a.Flush(a.ctx)
+	a.mu.Lock()
+	if errors.Is(err, ErrInternal) {
+		a.flushLoopFailures++
+	} else {
+		a.flushLoopFailures = 0
+	}
+	a.mu.Unlock()
+	if err != nil {
 		consecutive++
 		if consecutive < 3 {
 			a.logger.Printf("guardagent: periodic flush failed: %v", err)
@@ -792,12 +834,12 @@ func (a *Agent) flushIfNeeded() {
 	}
 }
 
-func (a *Agent) flushEvents(ctx context.Context, force bool) error {
+func (a *Agent) flushEvents(ctx context.Context) error {
 	if !a.cfg.EnableEvents {
 		return nil
 	}
 	a.mu.Lock()
-	if !force && a.gateClosedLocked(a.eventGate) {
+	if a.gateClosedLocked(a.eventGate) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -839,12 +881,12 @@ func (a *Agent) sendEventsSafely(ctx context.Context, items []SecurityEvent) (ou
 	return a.tr.sendEvents(ctx, items)
 }
 
-func (a *Agent) flushMetrics(ctx context.Context, force bool) error {
+func (a *Agent) flushMetrics(ctx context.Context) error {
 	if !a.cfg.EnableMetrics {
 		return nil
 	}
 	a.mu.Lock()
-	if !force && a.gateClosedLocked(a.metricGate) {
+	if a.gateClosedLocked(a.metricGate) {
 		a.mu.Unlock()
 		return nil
 	}
@@ -1056,8 +1098,10 @@ func (a *Agent) reportStatus(ctx context.Context) {
 	}()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	ok := outcome == outcomeAccepted
+	a.lastStatusPushOK = &ok
 	switch outcome {
-	case outcomeAccepted, outcomePermanent:
+	case outcomeAccepted:
 		a.statusSent++
 		a.statusStreak = 0
 	default:
@@ -1081,7 +1125,7 @@ func (a *Agent) statusPayload() agentStatusPayload {
 		EventsSent:   a.eventsSent,
 		EventsFailed: a.eventsFailed,
 		BufferSize:   len(a.events) + len(a.metrics),
-		Errors:       append([]string(nil), a.lastErrors...),
+		Errors:       append([]string{}, a.lastErrors...),
 	}
 	if a.started && !a.closed {
 		payload.Uptime = time.Since(a.startedAt).Seconds()
@@ -1103,8 +1147,10 @@ func (a *Agent) stateLocked() string {
 	if float64(len(a.events)+len(a.metrics)) >= float64(a.cfg.BufferSize)*degradedBufferRatio {
 		return StatusDegraded
 	}
-	total := a.eventsSent + a.eventsFailed
-	if total > 0 && float64(a.eventsFailed)/float64(total) > degradedFailureRate {
+	// Events plus metrics, like the reference (_client_status.py:47-57).
+	failed := a.eventsFailed + a.metricsFailed
+	total := a.eventsSent + a.metricsSent + failed
+	if total > 0 && float64(failed)/float64(total) > degradedFailureRate {
 		return StatusDegraded
 	}
 	return StatusHealthy
@@ -1230,4 +1276,9 @@ func recoverPanic(logger *log.Logger, method string, err *error) {
 			*err = fmt.Errorf("%w in %s: %v", ErrInternal, method, r)
 		}
 	}
+}
+
+// epochSeconds is a float epoch timestamp, the reference's time.time().
+func epochSeconds(t time.Time) float64 {
+	return float64(t.UnixNano()) / float64(time.Second)
 }

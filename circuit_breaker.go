@@ -25,11 +25,11 @@ const (
 func (s circuitState) String() string {
 	switch s {
 	case circuitOpen:
-		return "open"
+		return "OPEN"
 	case circuitHalfOpen:
-		return "half_open"
+		return "HALF_OPEN"
 	default:
-		return "closed"
+		return "CLOSED"
 	}
 }
 
@@ -101,9 +101,17 @@ func (cb *CircuitBreaker) Open() bool {
 	return cb.state == circuitOpen
 }
 
-// State returns "closed", "open", or "half_open".
+// State returns "CLOSED", "OPEN", or "HALF_OPEN", the reference spelling.
 func (cb *CircuitBreaker) State() string {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	return cb.state.String()
+}
+
+// FailureCount returns the consecutive failures recorded since the last
+// success.
+func (cb *CircuitBreaker) FailureCount() int {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.failureCount
 }

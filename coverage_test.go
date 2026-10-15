@@ -665,7 +665,7 @@ func TestSendBatchStatusHandling(t *testing.T) {
 	tr := newTransport(cfg, "install", nil, log.New(io.Discard, "", 0))
 
 	// 200 + evaluate clean body.
-	if outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{"x":1}`), true); outcome != outcomeAccepted || err != nil {
+	if outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{"x":1}`)); outcome != outcomeAccepted || err != nil {
 		t.Fatalf("clean 200 must accept, got %v %v", outcome, err)
 	}
 	// 201 skips evaluation.
@@ -674,7 +674,7 @@ func TestSendBatchStatusHandling(t *testing.T) {
 		m.statusCodeOverride = http.StatusCreated
 		m.mu.Unlock()
 		defer func() { m.statusCodeOverride = 0 }()
-		return tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+		return tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	}(); outcome != outcomeAccepted || err != nil {
 		t.Fatalf("201 must accept without evaluation, got %v %v", outcome, err)
 	}
@@ -683,7 +683,7 @@ func TestSendBatchStatusHandling(t *testing.T) {
 		m.mu.Lock()
 		m.statusCodeOverride = code
 		m.mu.Unlock()
-		outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+		outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 		m.mu.Lock()
 		m.statusCodeOverride = 0
 		m.mu.Unlock()
@@ -696,7 +696,7 @@ func TestSendBatchStatusHandling(t *testing.T) {
 	m.mu.Lock()
 	m.statusCodeOverride = http.StatusConflict
 	m.mu.Unlock()
-	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	m.mu.Lock()
 	m.statusCodeOverride = 0
 	m.mu.Unlock()
@@ -707,7 +707,7 @@ func TestSendBatchStatusHandling(t *testing.T) {
 	m.mu.Lock()
 	m.statusCodeOverride = http.StatusForbidden
 	m.mu.Unlock()
-	outcome, err = tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+	outcome, err = tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	m.mu.Lock()
 	m.statusCodeOverride = 0
 	m.mu.Unlock()
@@ -717,13 +717,13 @@ func TestSendBatchStatusHandling(t *testing.T) {
 	// A canceled context during the send surfaces the context error.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if outcome, err := tr.sendBatch(ctx, eventsPath, []byte(`{}`), true); outcome != outcomeFailed || !errors.Is(err, context.Canceled) {
+	if outcome, err := tr.sendBatch(ctx, eventsPath, []byte(`{}`)); outcome != outcomeFailed || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled sends must report the context, got %v %v", outcome, err)
 	}
 	// Network errors retry with backoff and exhaust into outcomeFailed.
 	down := newTransport(cfg, "install", nil, log.New(io.Discard, "", 0))
 	down.cfg.Endpoint = "http://127.0.0.1:1"
-	if outcome, err := down.sendBatch(context.Background(), eventsPath, []byte(`{}`), true); outcome != outcomeFailed || err == nil {
+	if outcome, err := down.sendBatch(context.Background(), eventsPath, []byte(`{}`)); outcome != outcomeFailed || err == nil {
 		t.Fatalf("unreachable endpoints must fail after retries, got %v %v", outcome, err)
 	}
 }
@@ -810,10 +810,10 @@ func TestSendStatusPaths(t *testing.T) {
 		t.Fatalf("status marshal failure must be partial, got %v %v", outcome, err)
 	}
 	jsonMarshal = json.Marshal
-	// A 413 on status drops it (fire and forget), never requeues.
+	// A 413 on status is a failed push (fire and forget), never requeued.
 	m.setMaxBody(1)
-	if outcome, err := tr.sendStatus(context.Background(), payload); outcome != outcomePermanent || err != nil {
-		t.Fatalf("oversized status must drop, got %v %v", outcome, err)
+	if outcome, err := tr.sendStatus(context.Background(), payload); outcome != outcomeFailed || err == nil {
+		t.Fatalf("oversized status must fail the push, got %v %v", outcome, err)
 	}
 	m.setMaxBody(262144)
 }
@@ -1014,8 +1014,13 @@ func TestFetchDynamicRulesStatusHandling(t *testing.T) {
 	tr := newTransport(cfg, "install", nil, log.New(io.Discard, "", 0))
 	ctx := context.Background()
 
-	// 200 with a malformed body surfaces a decode error.
+	// 200 with an unparseable body is a no-result retried at once.
 	m.serveRules(http.StatusOK, "{not json")
+	if _, err := tr.fetchDynamicRules(ctx); !errors.Is(err, errNoResult) {
+		t.Fatalf("unparseable rules must be a no-result, got %v", err)
+	}
+	// 200 with an object of the wrong shape surfaces a decode error.
+	m.serveRules(http.StatusOK, `{"version":"x"}`)
 	if _, err := tr.fetchDynamicRules(ctx); err == nil || !strings.Contains(err.Error(), "malformed dynamic rules") {
 		t.Fatalf("malformed rules must surface, got %v", err)
 	}
@@ -1567,6 +1572,7 @@ func TestRulesLoopServesLastKnownRules(t *testing.T) {
 	cfg.FlushInterval = time.Hour
 	cfg.StatusInterval = time.Hour
 	cfg.BackoffFactor = 0.001
+	cfg.ProjectID = "proj-1"
 	cfg.InstallIDPath = filepath.Join(t.TempDir(), "install-id")
 	agent, err := New(cfg, WithLogger(logger))
 	if err != nil {

@@ -57,7 +57,8 @@ to the canonical Python JSON bytes, encrypted with AES-256-GCM (fresh 12-byte
 nonce per batch), and posted to `/api/v1/events/encrypted` in the Python
 envelope; status reports stay plaintext. An invalid key or a failed round-trip
 verification fails construction: there is no plaintext fallback. A 413 on the
-encrypted path drops durably because an encrypted payload cannot be split.
+encrypted path halves the batch and encrypts each half separately, like the
+plaintext path; a singleton that still 413s is dropped durably.
 
 ## Redis persistence
 

@@ -183,11 +183,18 @@ func replaceOrEmpty(decoded, fallback []string) []string {
 	return fallback
 }
 
+// isPermanentStatus reports the statuses the reference raises as
+// PermanentClientError or PayloadTooLargeError (400, 404, 413, 422).
+func isPermanentStatus(code int) bool {
+	return code == http.StatusBadRequest || code == http.StatusNotFound ||
+		code == http.StatusRequestEntityTooLarge || code == http.StatusUnprocessableEntity
+}
+
 // fetchDynamicRules GETs the rules document with the same retry machinery
 // as batch sends: local rate limiter admission, circuit breaker, capped
 // Retry-After on 429, exponential backoff on every other failure. A nil
-// result with a nil error never happens; on give-up the error is
-// returned and the caller falls back to its cache.
+// result with a nil error means an empty rules object (reference: None);
+// on give-up the error is returned and the caller falls back to its cache.
 func (t *transport) fetchDynamicRules(ctx context.Context) (*DynamicRules, error) {
 	for attempt := 0; ; attempt++ {
 		if allowed, gateErr := t.limiterGate(ctx, attempt, "dynamic rules fetch"); !allowed {
@@ -211,11 +218,12 @@ func (t *transport) fetchDynamicRules(ctx context.Context) (*DynamicRules, error
 		}
 		resp, err := t.client.Do(req)
 		if err != nil {
-			t.breaker.Failure()
-			t.requestsFailed.Add(1)
+			// A cancelled context never counts against the breaker.
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			t.breaker.Failure()
+			t.requestsFailed.Add(1)
 			if attempt < t.cfg.RetryAttempts && sleepCtx(ctx, retryBackoff(attempt, t.cfg.BackoffFactor)) {
 				continue
 			}
@@ -226,10 +234,23 @@ func (t *transport) fetchDynamicRules(ctx context.Context) (*DynamicRules, error
 		switch {
 		case resp.StatusCode == http.StatusOK:
 			t.breaker.Success()
+			var object map[string]any
+			if json.Unmarshal(body, &object) != nil || object == nil {
+				// An unparseable or non-object 200 is a no-result: retried
+				// at once (the reference counts it failed and loops).
+				t.requestsFailed.Add(1)
+				if attempt < t.cfg.RetryAttempts {
+					continue
+				}
+				return nil, fmt.Errorf("%w: dynamic rules response was not a JSON object", errNoResult)
+			}
 			t.requestsSent.Add(1)
+			if len(object) == 0 {
+				// fetch_dynamic_rules returns None for an empty object.
+				return nil, nil
+			}
 			var rules DynamicRules
 			if err := json.Unmarshal(body, &rules); err != nil {
-				t.requestsFailed.Add(1)
 				return nil, fmt.Errorf("guardagent: malformed dynamic rules response: %w", err)
 			}
 			return &rules, nil
@@ -241,13 +262,31 @@ func (t *transport) fetchDynamicRules(ctx context.Context) (*DynamicRules, error
 				continue
 			}
 			return nil, &RateLimitedError{RetryAfter: delay}
-		default:
+		case isPermanentStatus(resp.StatusCode):
+			// 400/404/413/422 are definitive verdicts (PermanentClientError
+			// in the reference): retried with backoff but never counted
+			// against the breaker.
+			t.requestsFailed.Add(1)
+			if attempt < t.cfg.RetryAttempts && sleepCtx(ctx, retryBackoff(attempt, t.cfg.BackoffFactor)) {
+				continue
+			}
+			return nil, fmt.Errorf("guardagent: dynamic rules request failed with status %d: %s", resp.StatusCode, truncate(string(body), 200))
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode >= 500:
 			t.breaker.Failure()
 			t.requestsFailed.Add(1)
 			if attempt < t.cfg.RetryAttempts && sleepCtx(ctx, retryBackoff(attempt, t.cfg.BackoffFactor)) {
 				continue
 			}
 			return nil, fmt.Errorf("guardagent: dynamic rules request failed with status %d: %s", resp.StatusCode, truncate(string(body), 200))
+		default:
+			// Any other status (201, 202, 204, 3xx, 405, 408, ...) is a
+			// transient no-result: retried at once, breaker untouched.
+			t.breaker.Success()
+			t.requestsFailed.Add(1)
+			if attempt < t.cfg.RetryAttempts {
+				continue
+			}
+			return nil, fmt.Errorf("%w: dynamic rules request returned status %d", errNoResult, resp.StatusCode)
 		}
 	}
 }

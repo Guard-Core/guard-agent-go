@@ -128,7 +128,7 @@ func TestSendBatchLocalLimiterDefersThenSends(t *testing.T) {
 	tr.limiter.mu.Lock()
 	tr.limiter.calls = []time.Time{time.Now()}
 	tr.limiter.mu.Unlock()
-	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	if outcome != outcomeAccepted || err != nil {
 		t.Fatalf("a deferred local gate must retry and accept, got %v %v", outcome, err)
 	}
@@ -172,7 +172,7 @@ func TestSplitOrDropEventsFailsWhenHalfFails(t *testing.T) {
 	for i := range events {
 		events[i] = testEvent(i, pad)
 	}
-	m.setMaxBody(320)
+	m.setMaxBody(800)
 	m.failNext(2)
 	if outcome := tr.splitOrDropEvents(context.Background(), events); outcome != outcomeFailed {
 		t.Fatalf("a failed split half must fail the aggregate, got %v", outcome)
@@ -186,7 +186,7 @@ func TestSendBatchNewRequestFailure(t *testing.T) {
 	cfg.APIKey = "test-api-key-123"
 	cfg.Endpoint = "://bad endpoint"
 	tr := newTransport(cfg, "install", nil, log.New(io.Discard, "", 0))
-	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	if outcome != outcomeFailed || err == nil {
 		t.Fatalf("an unparseable endpoint must fail the request build, got %v %v", outcome, err)
 	}
@@ -201,7 +201,7 @@ func TestSendBatchRetriesAfter429(t *testing.T) {
 	cfg.BackoffFactor = 0.001
 	tr := newTransport(cfg, "install", nil, log.New(io.Discard, "", 0))
 	m.rateLimitNext(1, "0.05")
-	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`), true)
+	outcome, err := tr.sendBatch(context.Background(), eventsPath, []byte(`{}`))
 	if outcome != outcomeAccepted || err != nil {
 		t.Fatalf("a 429 followed by a success must accept, got %v %v", outcome, err)
 	}

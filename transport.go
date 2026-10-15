@@ -78,11 +78,22 @@ type transport struct {
 
 	requestsSent   atomic.Int64
 	requestsFailed atomic.Int64
+	bytesSent      atomic.Int64
 }
+
+// errNoResult marks a response the reference maps to "no result" (an
+// unparseable or empty-object 200, 202, 204, 3xx, 405, 408 and any other
+// unlisted status): it is retried at once, never opens the breaker and is
+// never accepted (_handle_response returns False, _send_with_retry loops).
+var errNoResult = errors.New("guardagent: response carried no usable result")
 
 func newTransport(cfg Config, installID string, client *http.Client, logger *log.Logger) *transport {
 	if client == nil {
-		client = &http.Client{Timeout: cfg.Timeout}
+		// Redirects are never followed, like the reference's httpx client.
+		client = &http.Client{
+			Timeout:       cfg.Timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	return &transport{
 		cfg:       cfg,
@@ -140,9 +151,8 @@ func userAgent() string {
 }
 
 // sendEvents posts one events batch. With a project encryption key
-// configured, the batch goes encrypted to /api/v1/events/encrypted and a
-// 413 drops durably (encrypted payloads cannot be split). Otherwise a 413
-// recurses into the split-or-drop path.
+// configured, the batch goes encrypted to /api/v1/events/encrypted. Either
+// way a 413 recurses into the split-or-drop path (each half is re-encrypted).
 func (t *transport) sendEvents(ctx context.Context, events []SecurityEvent) (sendOutcome, error) {
 	if len(events) == 0 {
 		return outcomeAccepted, nil
@@ -164,7 +174,7 @@ func (t *transport) sendEvents(ctx context.Context, events []SecurityEvent) (sen
 		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": eventsPath, "data_type": "events"})
 		return outcomePartial, err
 	}
-	outcome, err := t.sendBatch(ctx, eventsPath, raw, true)
+	outcome, err := t.sendBatch(ctx, eventsPath, raw)
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
 		return t.splitOrDropEvents(ctx, events), nil
@@ -198,7 +208,7 @@ func (t *transport) sendMetrics(ctx context.Context, metrics []SecurityMetric) (
 		t.fireHook(StageTransportSend, err, map[string]any{"endpoint": metricsPath, "data_type": "metrics"})
 		return outcomePartial, err
 	}
-	outcome, err := t.sendBatch(ctx, metricsPath, raw, true)
+	outcome, err := t.sendBatch(ctx, metricsPath, raw)
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
 		return t.splitOrDropMetrics(ctx, metrics), nil
@@ -223,8 +233,8 @@ type encryptedEnvelope struct {
 
 // sendEncryptedBatch encrypts the events/metrics arrays with AES-256-GCM
 // and POSTs the Python-shaped envelope. Serialization or encryption
-// failure retains the batch (requeue); a 413 drops durably because an
-// encrypted payload cannot be split.
+// failure retains the batch (requeue); a 413 halves the batch and sends each
+// half re-encrypted, like the reference.
 func (t *transport) sendEncryptedBatch(
 	ctx context.Context, events []SecurityEvent, metrics []SecurityMetric,
 ) (sendOutcome, error) {
@@ -252,13 +262,13 @@ func (t *transport) sendEncryptedBatch(
 		t.fireHook(StageEncryption, err, map[string]any{"endpoint": encryptedPath})
 		return outcomePartial, err
 	}
-	outcome, err := t.sendBatch(ctx, encryptedPath, envelope, true)
+	outcome, err := t.sendBatch(ctx, encryptedPath, envelope)
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
-		t.logger.Printf("guardagent: encrypted batch exceeds the ingestion payload limit; dropping durably")
-		t.requestsFailed.Add(1)
-		t.fireHook(StageTransportSend, tooLarge, map[string]any{"endpoint": encryptedPath})
-		return outcomePermanent, nil
+		if len(events) > 0 {
+			return t.splitOrDropEvents(ctx, events), nil
+		}
+		return t.splitOrDropMetrics(ctx, metrics), nil
 	}
 	return outcome, err
 }
@@ -268,6 +278,7 @@ func (t *transport) sendEncryptedBatch(
 // round-tripped through a UseNumber decoder so integer fields stay
 // integers on the canonical plaintext.
 func canonicalItemsJSON(events []SecurityEvent, metrics []SecurityMetric) (map[string]any, error) {
+	normalizeItems(events, metrics)
 	payload := map[string]any{"events": []any{}, "metrics": []any{}}
 	if len(events) > 0 {
 		raw, err := jsonMarshal(events)
@@ -291,19 +302,26 @@ func canonicalItemsJSON(events []SecurityEvent, metrics []SecurityMetric) (map[s
 }
 
 // sendStatus posts the periodic status report. Status is fire-and-forget:
-// any rejection is logged and counted, never requeued.
+// any rejection is logged and counted as a failed push, never requeued.
 func (t *transport) sendStatus(ctx context.Context, payload agentStatusPayload) (sendOutcome, error) {
 	raw, err := t.marshalStatus(payload)
 	if err != nil {
 		t.logger.Printf("guardagent: serialization failed for status report: %v", err)
 		return outcomePartial, err
 	}
-	outcome, err := t.sendBatch(ctx, statusPath, raw, false)
+	outcome, err := t.sendBatch(ctx, statusPath, raw)
+	// The reference's send_status turns a PermanentClientError or
+	// PayloadTooLargeError into a False return: a rejected push is a failed
+	// push (never a success).
 	var tooLarge *payloadTooLargeError
 	if errors.As(err, &tooLarge) {
 		t.logger.Printf("guardagent: status report exceeds the ingestion payload limit; dropping")
 		t.requestsFailed.Add(1)
-		return outcomePermanent, nil
+		return outcomeFailed, err
+	}
+	if outcome == outcomePermanent {
+		t.requestsFailed.Add(1)
+		return outcomeFailed, err
 	}
 	return outcome, err
 }
@@ -350,6 +368,13 @@ func (t *transport) splitOrDropMetrics(ctx context.Context, metrics []SecurityMe
 // second redaction pass.
 func (t *transport) marshalBatch(batch *eventBatch) ([]byte, error) {
 	redactBatch(batch, t.cfg.SensitiveHeaders)
+	normalizeItems(batch.Events, batch.Metrics)
+	if batch.Events == nil {
+		batch.Events = []SecurityEvent{}
+	}
+	if batch.Metrics == nil {
+		batch.Metrics = []SecurityMetric{}
+	}
 	raw, err := jsonMarshal(batch)
 	if err != nil {
 		return nil, err
@@ -388,11 +413,11 @@ func (t *transport) projectIDOrDefault() string {
 // status-specific outcome handling.
 //
 // Status code handling mirrors guard-agent (Python) _transport_dispatch:
-// 200/201 success (200 evaluated for partial failure when evaluate), 429
+// 200/201 success (200 evaluated for partial failure), 429
 // honored via capped Retry-After, 413 split-or-drop, 400/404/422 permanent,
 // 401/403 and 5xx and network errors retried with exponential backoff,
-// any other 4xx treated as a partial failure.
-func (t *transport) sendBatch(ctx context.Context, path string, raw []byte, evaluate bool) (sendOutcome, error) {
+// any other status a transient no-result retried at once without the breaker.
+func (t *transport) sendBatch(ctx context.Context, path string, raw []byte) (sendOutcome, error) {
 	wire, contentEncoding := t.encodeBody(raw)
 	signature := ""
 	if t.cfg.SigningSecret != "" {
@@ -428,13 +453,16 @@ func (t *transport) sendBatch(ctx context.Context, path string, raw []byte, eval
 		if t.cfg.ProjectID != "" {
 			req.Header.Set("X-Project-Id", t.cfg.ProjectID)
 		}
+		t.bytesSent.Add(int64(len(wire)))
 		resp, err := t.client.Do(req)
 		if err != nil {
-			t.breaker.Failure()
-			t.requestsFailed.Add(1)
+			// A cancelled context is the caller stopping, not a transport
+			// fault: asyncio.CancelledError bypasses the reference breaker.
 			if ctx.Err() != nil {
 				return outcomeFailed, ctx.Err()
 			}
+			t.breaker.Failure()
+			t.requestsFailed.Add(1)
 			if attempt < t.cfg.RetryAttempts && sleepCtx(ctx, retryBackoff(attempt, t.cfg.BackoffFactor)) {
 				continue
 			}
@@ -445,11 +473,19 @@ func (t *transport) sendBatch(ctx context.Context, path string, raw []byte, eval
 		switch {
 		case resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated:
 			t.breaker.Success()
-			t.requestsSent.Add(1)
-			if !evaluate || resp.StatusCode == http.StatusCreated {
-				return outcomeAccepted, nil
+			outcome, evalErr := outcomeAccepted, error(nil)
+			if resp.StatusCode == http.StatusOK {
+				outcome, evalErr = t.evaluateBatchResponse(body)
 			}
-			return t.evaluateBatchResponse(body)
+			if outcome == outcomeAccepted {
+				t.requestsSent.Add(1)
+			} else {
+				t.requestsFailed.Add(1)
+			}
+			if errors.Is(evalErr, errNoResult) && attempt < t.cfg.RetryAttempts {
+				continue
+			}
+			return outcome, evalErr
 		case resp.StatusCode == http.StatusTooManyRequests:
 			t.breaker.Failure()
 			t.requestsFailed.Add(1)
@@ -481,8 +517,14 @@ func (t *transport) sendBatch(ctx context.Context, path string, raw []byte, eval
 			}
 			return outcomeFailed, fmt.Errorf("guardagent: authentication failed with status %d", resp.StatusCode)
 		default:
+			// Any status the reference does not list (202, 204, 3xx, 405,
+			// 408, ...): a transient no-result, retried at once, no breaker.
 			t.breaker.Success()
-			return outcomePartial, fmt.Errorf("guardagent: unexpected status %d", resp.StatusCode)
+			t.requestsFailed.Add(1)
+			if attempt < t.cfg.RetryAttempts {
+				continue
+			}
+			return outcomePartial, fmt.Errorf("%w: unexpected status %d", errNoResult, resp.StatusCode)
 		}
 	}
 }
@@ -506,19 +548,44 @@ func (t *transport) encodeBody(raw []byte) ([]byte, string) {
 	return buf.Bytes(), "gzip"
 }
 
-// evaluateBatchResponse mirrors _evaluate_send_result: a 200 with
-// success:false or a non-empty errors list is a partial failure; a
-// malformed body is treated the same way so the batch is requeued rather
-// than lost.
+// evaluateBatchResponse mirrors _evaluate_send_result over a 200 body: only
+// an explicit success:false or a truthy errors value is a partial failure
+// (requeue, no retry); an unparseable body or an empty JSON object is a
+// no-result (errNoResult, retried at once); any other body, including a
+// non-object JSON value or an object without success, is accepted.
 func (t *transport) evaluateBatchResponse(body []byte) (sendOutcome, error) {
-	var r batchResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return outcomePartial, fmt.Errorf("guardagent: malformed ingest response: %w", err)
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return outcomePartial, fmt.Errorf("%w: malformed ingest response: %v", errNoResult, err)
 	}
-	if !r.Success || len(r.Errors) > 0 {
+	obj, isObject := parsed.(map[string]any)
+	if !isObject {
+		return outcomeAccepted, nil
+	}
+	if success, ok := obj["success"].(bool); (ok && !success) || isTruthy(obj["errors"]) {
 		return outcomePartial, nil
 	}
+	if len(obj) == 0 {
+		return outcomePartial, fmt.Errorf("%w: empty ingest response object", errNoResult)
+	}
 	return outcomeAccepted, nil
+}
+
+// isTruthy is Python truthiness for a decoded JSON value.
+func isTruthy(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case float64:
+		return x != 0
+	case string:
+		return x != ""
+	case []any:
+		return len(x) > 0
+	case map[string]any:
+		return len(x) > 0
+	}
+	return false // null
 }
 
 // parseRetryAfter parses the Retry-After header (delay-seconds form),
