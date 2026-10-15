@@ -2,7 +2,6 @@ package guardagent
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -53,7 +52,20 @@ func newFakeRedis(t *testing.T, gated bool) *fakeRedis {
 	return f
 }
 
-func (f *fakeRedis) release() { f.gateOnce.Do(func() { close(f.gate) }) }
+func (f *fakeRedis) release() {
+	f.mu.Lock()
+	gate := f.gate
+	f.mu.Unlock()
+	f.gateOnce.Do(func() { close(gate) })
+}
+
+// rearm closes the gate again after release, for a second stalled episode.
+func (f *fakeRedis) rearm() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gate = make(chan struct{})
+	f.gateOnce = sync.Once{}
+}
 
 func (f *fakeRedis) serve(c net.Conn) {
 	defer c.Close()
@@ -82,7 +94,10 @@ func (f *fakeRedis) serve(c net.Conn) {
 			_, _ = c.Write([]byte("-ERR unknown command\r\n"))
 		case "SET":
 			f.setSeen <- args[1]
-			<-f.gate
+			f.mu.Lock()
+			gate := f.gate
+			f.mu.Unlock()
+			<-gate
 			f.mu.Lock()
 			f.sets = append(f.sets, args[1])
 			f.order = append(f.order, "SET "+args[1])
@@ -339,7 +354,7 @@ func TestInflightPersistsNeverExceedBufferSize(t *testing.T) {
 
 func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
 	f := newFakeRedis(t, true)
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	agent := newTestAgent(t, newMockIngest(t), func(c *Config) {
 		c.Redis = &RedisConfig{URL: "redis://" + f.ln.Addr().String(), Prefix: "t", TTL: time.Minute}
 		c.BufferSize = 3
@@ -357,20 +372,22 @@ func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
 	}
 	f.release()
 	agent.persistWG.Wait()
-	if inflightLen(agent) != 0 || agent.persistOverflowLogged {
+	agent.mu.Lock()
+	drained := len(agent.inflight) == 0 && !agent.persistOverflowLogged
+	agent.mu.Unlock()
+	if !drained {
 		t.Fatal("draining must end the episode")
 	}
 
 	// A second episode saturates again and warns again.
-	f2 := newFakeRedis(t, true)
-	agent.persist, _ = newPersistence(&RedisConfig{URL: "redis://" + f2.ln.Addr().String(), Prefix: "t", TTL: time.Minute}, agent.logger)
+	f.rearm()
 	for i := 0; i < 5; i++ {
 		_ = agent.SendMetric(ctx, testMetric(i))
 	}
 	if warnings() != 2 {
 		t.Fatalf("the second episode must warn again, got %d", warnings())
 	}
-	f2.release()
+	f.release()
 	agent.persistWG.Wait()
 }
 
