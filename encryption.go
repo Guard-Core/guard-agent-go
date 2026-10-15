@@ -27,9 +27,15 @@ func (e *EncryptionError) Error() string { return e.msg }
 
 // EncryptionConfigError mirrors the Python EncryptionConfigError: raised
 // when encryption initialization fails; plaintext fallback is forbidden.
-type EncryptionConfigError struct{ msg string }
+type EncryptionConfigError struct {
+	msg   string
+	cause error
+}
 
 func (e *EncryptionConfigError) Error() string { return e.msg }
+
+// Unwrap exposes the underlying key or round-trip failure, if any.
+func (e *EncryptionConfigError) Unwrap() error { return e.cause }
 
 // PayloadEncryptor encrypts telemetry payloads with AES-256-GCM, matching
 // the Python agent byte-for-byte on the wire: canonical JSON plaintext

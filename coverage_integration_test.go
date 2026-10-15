@@ -259,11 +259,13 @@ func TestOverflowDropConfirmsEvictedPersistedMetric(t *testing.T) {
 	if err := agent.SendMetric(ctx, testMetric(1)); err != nil {
 		t.Fatalf("SendMetric: %v", err)
 	}
+	agent.persistWG.Wait() // the persist backlog is capped at BufferSize
 	// The buffer holds one metric; the second evicts the first, whose
 	// persisted record must be confirmed (deleted).
 	if err := agent.SendMetric(ctx, testMetric(2)); err != nil {
 		t.Fatalf("SendMetric: %v", err)
 	}
+	agent.persistWG.Wait()
 	waitUntil(t, 5*time.Second, "the evicted record must be deleted", func() bool {
 		return len(scanAll(ctx, client, prefix+":agent_metrics:*")) == 1
 	})

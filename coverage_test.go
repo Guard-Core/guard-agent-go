@@ -117,7 +117,7 @@ func TestEncryptionErrorMessages(t *testing.T) {
 	if enc.Error() != "boom" {
 		t.Fatalf("EncryptionError message mismatch: %q", enc.Error())
 	}
-	cfgErr := &EncryptionConfigError{"no fallback"}
+	cfgErr := &EncryptionConfigError{msg: "no fallback"}
 	if cfgErr.Error() != "no fallback" {
 		t.Fatalf("EncryptionConfigError message mismatch: %q", cfgErr.Error())
 	}
