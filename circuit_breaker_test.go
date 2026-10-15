@@ -41,8 +41,8 @@ func TestCircuitBreakerHalfOpenThenRecovery(t *testing.T) {
 	if err := cb.Admit(); err != nil {
 		t.Fatalf("Admit after recovery window: %v", err)
 	}
-	if cb.State() != "half_open" {
-		t.Fatalf("state got %q want half_open", cb.State())
+	if cb.State() != "HALF_OPEN" {
+		t.Fatalf("state got %q want HALF_OPEN", cb.State())
 	}
 	// A failure while half-open reopens the breaker with a fresh window.
 	now = base.Add(breakerRecoveryTimeout + time.Second)
@@ -55,7 +55,7 @@ func TestCircuitBreakerHalfOpenThenRecovery(t *testing.T) {
 		t.Fatalf("second Admit after recovery window: %v", err)
 	}
 	cb.Success()
-	if cb.Open() || cb.State() != "closed" {
+	if cb.Open() || cb.State() != "CLOSED" {
 		t.Fatalf("success must close the breaker, got state %q", cb.State())
 	}
 }

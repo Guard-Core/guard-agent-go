@@ -224,26 +224,27 @@ cfg.SigningSecret = os.Getenv("INGEST_PAYLOAD_SIGNING_SECRET")
 | Buffer full, `raise` | `SendEvent`/`SendMetric` return `*BufferFullError` (`errors.Is(err, guardagent.ErrBufferFull)`) |
 | Flush trigger | Combined occupancy at or above `BufferSize * HighWatermarkRatio`, or `FlushInterval` elapsed |
 | 200 | Confirm: delete persisted records, reset the failure streak |
-| 200 with `success:false` or `errors[]` | Requeue the whole batch in original order (at-least-once: duplicates possible, losses are not) |
+| 200 with `success:false` or `errors[]` | Requeue the whole batch in original order (at-least-once: duplicates possible, losses are not); a 200 body without `success` is accepted |
+| Unparseable or empty-object 200, 202, 204, 3xx, 405, 408 | Transient no-result: retried at once, never opens the breaker |
 | 429 | Honor `Retry-After` (60s default, 300s cap) and retry |
-| 413 | Halve the batch and send both halves; a singleton that still 413s is dropped durably |
+| 413 | Halve the batch and send both halves (re-encrypting each half when encryption is on); a singleton that still 413s is dropped durably |
 | 400 / 404 / 422 | Permanent: drop durably, never requeue |
 | 401 / 403 / 5xx / network | Retry with `BackoffFactor * 2^attempt` (60s cap) |
 | Repeated per-kind failure | Gate that kind for `min(FlushInterval * 2^(streak-1), 300s)` |
 | 5 consecutive transport failures | Circuit breaker opens for 60s, then admits one probe (half-open); permanent rejections and 413s are exempt |
-| `Status()` | `healthy`, `degraded` (breaker open, 90% occupancy, or >10% lifetime failure rate), or `failed` after `Stop` |
+| `Status()` | `healthy`, `degraded` (breaker open, 90% occupancy, or >10% lifetime failure rate over events and metrics), or `failed` after `Stop` |
 | Redis unavailable | Log, count, keep going; writes pause for 30s after 3 consecutive failures; records expire by TTL |
-| `Stop` | Cancel the loops, then one final flush that bypasses the backoff gates |
+| `Stop` | Cancel the loops, then one final flush of each kind under its backoff gate |
 
 ### The signature covers the uncompressed body
 
 The ingestion API verifies `X-Payload-Signature` **after** its gzip middleware decompresses the request (`telemetry_router.py`, `payload_signature.py`), so the signature must be an HMAC-SHA256 over the uncompressed JSON. This agent signs before compression and sends `v1=<hex>` accordingly.
 
-The Python and TypeScript agents sign the post-compression wire bytes instead, so their signatures stop verifying as soon as gzip kicks in. That mismatch is a known defect on their side; this agent intentionally does not reproduce it, and the test suite asserts the server-side semantic with a mock that decompresses first and verifies second.
+The Python agent signs the same way (it signs the raw body in `_build_post_body`, then gzips it), and the test suite asserts the server-side semantic with a mock that decompresses first and verifies second.
 
 ### Dynamic rules
 
-`GetDynamicRules(ctx)` fetches the SaaS rule document from `GET /api/v1/rules` (the full Python-agent `DynamicRules` surface) and caches it for the document's `ttl`; a failed poll serves the last known rules. `Start` runs a background polling loop on `DynamicRuleInterval`, and `Stats().RulesFetched` counts refreshes. `TruncatePayload`, `HashIP`, and `KnownEventTypes` round out the host-adapter helper surface.
+`GetDynamicRules(ctx)` fetches the SaaS rule document from `GET /api/v1/rules` (the full Python-agent `DynamicRules` surface) and caches it for the document's `ttl`; a failed poll serves the last known rules. When `ProjectID` is set, `Start` runs a background polling loop on `DynamicRuleInterval` (without a project id there is no loop), and `Stats().RulesFetched` counts refreshes. `TruncatePayload`, `HashIP`, and `KnownEventTypes` round out the host-adapter helper surface.
 
 ## Configuration
 

@@ -45,6 +45,12 @@ type mockIngest struct {
 	rulesStatus        int
 }
 
+// batchResponse is the TelemetryResponse body the mock ingest API returns.
+type batchResponse struct {
+	Success bool     `json:"success"`
+	Errors  []string `json:"errors"`
+}
+
 func newMockIngest(t interface {
 	Helper()
 	Cleanup(func())

@@ -19,7 +19,7 @@ func TestAgentStatsDictShape(t *testing.T) {
 	if stats["running"] != false || stats["uptime"] != 0.0 {
 		t.Fatalf("an unstarted agent must report running=false uptime=0, got %v", stats)
 	}
-	if stats["cached_rules"] != false || stats["rules_last_update"] != nil {
+	if stats["cached_rules"] != false || stats["rules_last_update"] != 0.0 {
 		t.Fatalf("unstarted agent rule state must be empty, got %v", stats)
 	}
 	for _, key := range []string{"events_sent", "metrics_sent", "events_failed", "metrics_failed", "rules_fetched"} {
@@ -32,6 +32,7 @@ func TestAgentStatsDictShape(t *testing.T) {
 		"events_buffered", "metrics_buffered", "events_flushed", "metrics_flushed",
 		"events_dropped", "metrics_dropped", "current_event_buffer_size",
 		"current_metric_buffer_size", "redis_persist_failures", "durability_degraded",
+		"last_flush_time", "auto_flush_running",
 	} {
 		if _, ok := buffer[key]; !ok {
 			t.Fatalf("buffer_stats must carry %q", key)
@@ -72,7 +73,7 @@ func TestAgentStatsDictRunningArms(t *testing.T) {
 	if stats["cached_rules"] != true {
 		t.Fatal("a fetched rules snapshot must report cached_rules=true")
 	}
-	if last, ok := stats["rules_last_update"].(string); !ok || last == "" {
+	if last, ok := stats["rules_last_update"].(float64); !ok || last <= 0 {
 		t.Fatalf("a stamped rules update must render the timestamp, got %v", stats["rules_last_update"])
 	}
 }

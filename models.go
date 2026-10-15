@@ -104,26 +104,29 @@ func IsKnownEventType(eventType string) bool {
 }
 
 // SecurityEvent is one security telemetry event. The JSON shape matches
-// guard_agent.models.SecurityEvent field for field; the ingestion API
+// guard_agent.models.SecurityEvent field for field (ip_address,
+// action_taken, reason and metadata are always present, as in the
+// reference; optional string fields are omitted where the reference sends
+// null, which the API treats the same); the ingestion API
 // requires timestamp and event_type and allows extra fields.
 type SecurityEvent struct {
 	Timestamp      time.Time      `json:"timestamp"`
 	EventType      string         `json:"event_type"`
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	IPAddress      string         `json:"ip_address,omitempty"`
+	IPAddress      string         `json:"ip_address"`
 	Country        string         `json:"country,omitempty"`
 	UserAgent      string         `json:"user_agent,omitempty"`
-	ActionTaken    string         `json:"action_taken,omitempty"`
-	Reason         string         `json:"reason,omitempty"`
+	ActionTaken    string         `json:"action_taken"`
+	Reason         string         `json:"reason"`
 	Endpoint       string         `json:"endpoint,omitempty"`
 	Method         string         `json:"method,omitempty"`
-	StatusCode     *int           `json:"status_code,omitempty"`
-	ResponseTime   *float64       `json:"response_time,omitempty"`
+	StatusCode     *int           `json:"status_code"`
+	ResponseTime   *float64       `json:"response_time"`
 	DecoratorType  string         `json:"decorator_type,omitempty"`
 	RuleType       string         `json:"rule_type,omitempty"`
 	PatternMatched string         `json:"pattern_matched,omitempty"`
 	HandlerName    string         `json:"handler_name,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
+	Metadata       map[string]any `json:"metadata"`
 }
 
 // SecurityMetric is one numeric telemetry sample. MetricType must be one of
@@ -133,15 +136,15 @@ type SecurityMetric struct {
 	MetricType string            `json:"metric_type"`
 	Value      float64           `json:"value"`
 	Endpoint   string            `json:"endpoint,omitempty"`
-	Tags       map[string]string `json:"tags,omitempty"`
+	Tags       map[string]string `json:"tags"`
 }
 
 // eventBatch is the wire payload for POST /api/v1/events and
 // POST /api/v1/metrics, matching BatchTelemetryRequest.
 type eventBatch struct {
 	ProjectID        string           `json:"project_id"`
-	Events           []SecurityEvent  `json:"events,omitempty"`
-	Metrics          []SecurityMetric `json:"metrics,omitempty"`
+	Events           []SecurityEvent  `json:"events"`
+	Metrics          []SecurityMetric `json:"metrics"`
 	BatchID          string           `json:"batch_id"`
 	CreatedAt        time.Time        `json:"created_at"`
 	Compressed       bool             `json:"compressed"`
@@ -159,16 +162,8 @@ type agentStatusPayload struct {
 	EventsSent   int64      `json:"events_sent"`
 	EventsFailed int64      `json:"events_failed"`
 	BufferSize   int        `json:"buffer_size"`
-	LastFlush    *time.Time `json:"last_flush,omitempty"`
-	Errors       []string   `json:"errors,omitempty"`
-}
-
-// batchResponse mirrors TelemetryResponse. A 200 with success false or a
-// non-empty errors list is a partial failure: the transport reports it so
-// the caller requeues the batch.
-type batchResponse struct {
-	Success bool     `json:"success"`
-	Errors  []string `json:"errors"`
+	LastFlush    *time.Time `json:"last_flush"`
+	Errors       []string   `json:"errors"`
 }
 
 // uuidFallbackCounter keeps generated identifiers unique if crypto/rand
@@ -206,4 +201,19 @@ func randomHex(n int) string {
 // 413 splits of the same batch stay idempotent-friendly.
 func newBatchID() string {
 	return fmt.Sprintf("%d-%s", time.Now().UnixMilli(), randomHex(4))
+}
+
+// normalizeItems gives nil metadata and tags the empty object the reference
+// serializes ({}), so the wire shape never carries null where Python sends {}.
+func normalizeItems(events []SecurityEvent, metrics []SecurityMetric) {
+	for i := range events {
+		if events[i].Metadata == nil {
+			events[i].Metadata = map[string]any{}
+		}
+	}
+	for i := range metrics {
+		if metrics[i].Tags == nil {
+			metrics[i].Tags = map[string]string{}
+		}
+	}
 }

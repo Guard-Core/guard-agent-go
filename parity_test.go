@@ -169,7 +169,7 @@ func TestGetDynamicRulesFetchesAndCaches(t *testing.T) {
 
 func TestGetDynamicRulesSparsePayloadGetsPythonDefaults(t *testing.T) {
 	m := newMockIngest(t)
-	m.serveRules(200, "{}")
+	m.serveRules(200, `{"emergency_mode": false}`)
 	agent := newTestAgent(t, m, nil)
 
 	rules := agent.GetDynamicRules(context.Background())

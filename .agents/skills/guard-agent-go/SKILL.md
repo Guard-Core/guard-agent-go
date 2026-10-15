@@ -13,7 +13,7 @@ Go telemetry agent for the [Guard ecosystem](https://github.com/Guard-Core/guard
 | --- | --- | --- |
 | `guardagent.New(cfg, opts...)` | func | Validates config, resolves the install id, never panics; options `WithLogger`, `WithHTTPClient` |
 | `guardagent.DefaultConfig()` | func | Full defaults (100-item buffers, 30s flush, 300s status, 0.8 watermark, drop, 3 retries, gzip at 1024) |
-| `agent.Start(ctx)` / `agent.Stop(ctx)` | methods | Start is idempotent; Stop cancels loops then does one final forced flush |
+| `agent.Start(ctx)` / `agent.Stop(ctx)` | methods | Start is idempotent; Stop cancels loops then does one final flush under the per-kind backoff gates |
 | `agent.SendEvent(ctx, ev)` / `agent.SendMetric(ctx, m)` | methods | Buffer one item; works before Start |
 | `agent.Flush(ctx)` | method | Drain and send both kinds now; returns the transport error of any failed kind |
 | `agent.Status()` / `agent.Healthy()` / `agent.Stats()` | methods | Snapshot, health check, lifetime counters |
@@ -70,7 +70,7 @@ cfg.SigningSecret = os.Getenv("INGEST_PAYLOAD_SIGNING_SECRET")
 
 ## Footguns
 
-- The signature MUST cover the uncompressed JSON body. The Python and TypeScript agents sign the post-gzip wire bytes, which fails server verification whenever gzip applies; this agent deliberately signs before compression.
+- The signature MUST cover the uncompressed JSON body. The Python agent signs the uncompressed body too (`_transport_dispatch.py`), so signing before compression is the reference behavior; signing the gzipped bytes would fail server verification.
 - `SendEvent` and `SendMetric` cannot report delivery: they only buffer. Inspect `Stats()` or `Status()` and call `Flush` when you need confirmation.
 - Hand-built `Config{}` values are not `DefaultConfig()`: `EnableEvents`, `EnableMetrics`, and `CompressionEnabled` default to false, and `RetryAttempts` 0 means zero retries.
 - Under `OverflowRaise`, `SendEvent` returns `*BufferFullError`; under `OverflowBlock` it waits until ctx ends. Drop, the default, never blocks and never fails.

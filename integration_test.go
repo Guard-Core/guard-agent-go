@@ -177,8 +177,11 @@ func TestIntegrationReloadAfterRestart(t *testing.T) {
 	if err := first.Flush(ctx); err == nil {
 		t.Fatal("Flush against a down endpoint must fail")
 	}
-	if err := first.Stop(ctx); err == nil {
-		t.Fatal("Stop with a down endpoint must report the final flush error")
+	// Stop's final flush runs under the per-kind backoff gate the failed
+	// Flush armed, like the reference stop(): nothing is sent and the
+	// records stay persisted.
+	if err := first.Stop(ctx); err != nil {
+		t.Fatalf("Stop under a closed gate must not flush: %v", err)
 	}
 	if got := len(testKeys(t, client)); got != 2 {
 		t.Fatalf("records after failed run got %d want 2", got)

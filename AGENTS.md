@@ -9,7 +9,7 @@ guard-agent-go is the Go telemetry agent for the Guard ecosystem. It is a framew
 - **Import path**: `github.com/rennf93/guard-agent-go/v3` (package `guardagent`)
 - **Go directive**: 1.25.0
 - **License**: MIT
-- **Release state**: no tag yet. Version `0.1.0` semantics are implemented and documented; releases are published as `v*` git tags when the maintainer cuts them. Until then pin a commit or track `main`.
+- **Release state**: released as `v*` git tags (latest tag v3.2.3); the module version is in `version.go` and moves in lockstep with the agent family.
 - **Only dependency**: `github.com/redis/go-redis/v9` (optional Redis persistence)
 
 ## Ecosystem Position
@@ -118,16 +118,17 @@ Start from `DefaultConfig()` and override. Three fields are zero-honest (the zer
 | Buffer full, policy `raise` | `SendEvent`/`SendMetric` return `*BufferFullError` (`errors.Is` `ErrBufferFull`) |
 | Flush trigger | Combined occupancy >= `BufferSize * HighWatermarkRatio`, or `FlushInterval` elapsed |
 | 200 success | Confirm: persisted records deleted, counters updated, streak reset |
-| 200 with `success:false` or `errors[]` | Partial failure: whole batch requeued in original order (duplicates possible, at-least-once) |
+| 200 with `success:false` or `errors[]` | Partial failure: whole batch requeued in original order (duplicates possible, at-least-once); a 200 body without `success` is accepted |
+| Unparseable or empty-object 200, 202, 204, 3xx, 405, 408 | Transient no-result: retried at once, never opens the breaker |
 | 429 | Honor `Retry-After` (default 60s when absent or invalid, clamped to 300s), then retry |
-| 413 | Recursive split-or-drop: halve the batch; a singleton that still 413s is durably dropped, never requeued |
+| 413 | Recursive split-or-drop: halve the batch (encrypted batches are re-encrypted per half); a singleton that still 413s is durably dropped, never requeued |
 | 400 / 404 / 422 | Permanent rejection: batch dropped durably, records confirmed, never requeued |
 | 401 / 403 / 5xx / network error | Retried with `BackoffFactor * 2^attempt`, capped at 60s |
 | Per-kind failure streak | Gate flushes for `min(FlushInterval * 2^(streak-1), 300s)`; success resets |
 | Circuit breaker | Opens after 5 consecutive transport failures, probes after 60s (half-open); permanent rejections and 413s are exempt |
-| Degraded status | Breaker open, combined occupancy >= 90%, or lifetime failure rate > 10% |
+| Degraded status | Breaker open, combined occupancy >= 90%, or lifetime failure rate > 10% (events plus metrics) |
 | Redis persistence | Write on enqueue with TTL, delete on confirm, reload on `Start`; any Redis failure is fail-open (logged + counted, plus a 30s write cooldown after 3 consecutive failures) |
-| Stop | Cancels loops, then one final forced flush bypassing the gates |
+| Stop | Cancels loops, then one final flush of each kind under its backoff gate |
 | Panic anywhere | Recovered, logged, reported as `ErrInternal`; in-flight batches are requeued |
 
 ## Development Commands

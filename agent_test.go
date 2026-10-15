@@ -405,7 +405,7 @@ func TestPartialFailureRequeues(t *testing.T) {
 
 func Test413SplitsBatch(t *testing.T) {
 	m := newMockIngest(t)
-	m.setMaxBody(1024)
+	m.setMaxBody(1400)
 	agent := newTestAgent(t, m, func(c *Config) { c.RetryAttempts = 0 })
 	pad := strings.Repeat("x", 200)
 	for i := 1; i <= 4; i++ {
@@ -657,7 +657,7 @@ func TestBreakerOpensAndHalfOpenRecovers(t *testing.T) {
 	if !agent.tr.breaker.Open() {
 		t.Fatalf("breaker must open after repeated failures, stats: %+v", agent.Stats())
 	}
-	if s := agent.Status(); s.State != StatusDegraded || s.CircuitState != "open" {
+	if s := agent.Status(); s.State != StatusDegraded || s.CircuitState != "OPEN" {
 		t.Fatalf("status must be degraded with an open breaker, got %+v", s)
 	}
 	sawCircuitOpen := false
@@ -681,7 +681,7 @@ func TestBreakerOpensAndHalfOpenRecovers(t *testing.T) {
 	for time.Now().Before(deadline) {
 		_ = agent.Flush(context.Background())
 		s := agent.Status()
-		if s.CircuitState == "closed" && agent.Stats().EventsSent > 0 {
+		if s.CircuitState == "CLOSED" && agent.Stats().EventsSent > 0 {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -701,7 +701,7 @@ func TestPermanentRejectionExemptFromBreaker(t *testing.T) {
 			t.Fatalf("Flush %d: %v", i, err)
 		}
 	}
-	if s := agent.Status(); s.CircuitState != "closed" {
+	if s := agent.Status(); s.CircuitState != "CLOSED" {
 		t.Fatalf("permanent rejections must not trip the breaker, got %q", s.CircuitState)
 	}
 	if len(m.callsTo(eventsPath)) != 6 {
