@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -39,6 +40,24 @@ func errWriter() io.Writer {
 type failingWriter struct{}
 
 func (failingWriter) Write(p []byte) (int, error) { return 0, errors.New("write exploded") }
+
+// lockedBuffer lets a test read log output while agent goroutines write it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // sealRawPlaintext seals arbitrary bytes with the project key exactly like
 // PayloadEncryptor does, so tests can present well-formed ciphertexts with
@@ -1539,7 +1558,7 @@ func TestAutoFlushLoopLogsRepeatedFailures(t *testing.T) {
 }
 
 func TestRulesLoopServesLastKnownRules(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	logger := log.New(&buf, "", 0)
 	m := newMockIngest(t)
 	cfg := DefaultConfig()
