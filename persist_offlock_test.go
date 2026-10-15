@@ -408,3 +408,33 @@ func TestRecordGoneBeforeWriteStartsIsNeverWritten(t *testing.T) {
 		t.Fatal("inflight must be empty")
 	}
 }
+
+func TestConfirmKeysMarksPendingWriteReleasedThenDeletesIt(t *testing.T) {
+	f := newFakeRedis(t, true)
+	agent := offLockAgent(t, f, newMockIngest(t), nil)
+	if err := agent.SendEvent(context.Background(), testEvent(1, "")); err != nil {
+		t.Fatalf("SendEvent: %v", err)
+	}
+	key := <-f.setSeen // the write is now blocked on the gate
+	agent.confirmKeys([]string{key})
+	agent.mu.Lock()
+	released, pending := agent.inflight[key]
+	agent.mu.Unlock()
+	if !pending || !released {
+		t.Fatalf("a confirm during the write must mark it released: pending=%v released=%v", pending, released)
+	}
+	f.release()
+	agent.persistWG.Wait()
+	// The confirm worker may delete the key before or after the write lands;
+	// the writer's own delete covers the second order.
+	waitUntil(t, 20*time.Second, "the key must be deleted", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, d := range f.dels {
+			if d == key {
+				return true
+			}
+		}
+		return false
+	})
+}
