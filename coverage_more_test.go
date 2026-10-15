@@ -416,6 +416,7 @@ func TestReserveKeysMarshalFailureCountsAndRecords(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 	agent := &Agent{
 		logger:  logger,
+		cfg:     DefaultConfig(),
 		tr:      newTransport(DefaultConfig(), "install", nil, logger),
 		persist: &persistence{logger: logger},
 	}

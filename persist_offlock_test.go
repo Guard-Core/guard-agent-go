@@ -2,9 +2,11 @@ package guardagent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"runtime"
 	"strconv"
@@ -309,4 +311,83 @@ func TestStopReturnsWhenContextEndsDuringDrain(t *testing.T) {
 	cancel()
 	within(t, "Stop with a done context", func() { _ = agent.Stop(ctx) })
 	f.release()
+}
+
+// inflightLen reads the in-flight persist count under the lock.
+func inflightLen(a *Agent) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.inflight)
+}
+
+func TestInflightPersistsNeverExceedBufferSize(t *testing.T) {
+	f := newFakeRedis(t, true)
+	agent := offLockAgent(t, f, newMockIngest(t), func(c *Config) { c.BufferSize = 3 })
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		_ = agent.SendEvent(ctx, testEvent(i, ""))
+	}
+	for i := 0; i < 3; i++ {
+		_ = agent.SendMetric(ctx, testMetric(i))
+	}
+	if got := inflightLen(agent); got > 3 {
+		t.Fatalf("in-flight persists %d exceed buffer size 3", got)
+	}
+	f.release()
+	agent.persistWG.Wait()
+}
+
+func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
+	f := newFakeRedis(t, true)
+	var buf bytes.Buffer
+	agent := newTestAgent(t, newMockIngest(t), func(c *Config) {
+		c.Redis = &RedisConfig{URL: "redis://" + f.ln.Addr().String(), Prefix: "t", TTL: time.Minute}
+		c.BufferSize = 3
+	}, WithLogger(log.New(&buf, "", 0)))
+	ctx := context.Background()
+	warnings := func() int { return strings.Count(buf.String(), "persist backlog at buffer_size=3;") }
+	for i := 0; i < 5; i++ {
+		_ = agent.SendEvent(ctx, testEvent(i, ""))
+	}
+	agent.mu.Lock()
+	failures, logged := agent.redisPersistFailures, agent.persistOverflowLogged
+	agent.mu.Unlock()
+	if failures != 2 || !logged || warnings() != 1 {
+		t.Fatalf("want 2 failures and one warning, got %d, logged=%v, warnings=%d", failures, logged, warnings())
+	}
+	f.release()
+	agent.persistWG.Wait()
+	if inflightLen(agent) != 0 || agent.persistOverflowLogged {
+		t.Fatal("draining must end the episode")
+	}
+
+	// A second episode saturates again and warns again.
+	f2 := newFakeRedis(t, true)
+	agent.persist, _ = newPersistence(&RedisConfig{URL: "redis://" + f2.ln.Addr().String(), Prefix: "t", TTL: time.Minute}, agent.logger)
+	for i := 0; i < 5; i++ {
+		_ = agent.SendMetric(ctx, testMetric(i))
+	}
+	if warnings() != 2 {
+		t.Fatalf("the second episode must warn again, got %d", warnings())
+	}
+	f2.release()
+	agent.persistWG.Wait()
+}
+
+func TestRecordGoneBeforeWriteStartsIsNeverWritten(t *testing.T) {
+	f := newFakeRedis(t, false)
+	agent := offLockAgent(t, f, newMockIngest(t), nil)
+	// The writer blocks on a.mu until the lock is released, so the record
+	// can be released before the write starts.
+	agent.mu.Lock()
+	key := agent.reserveEventKeyLocked(testEvent(1, ""))
+	agent.inflight[key] = true
+	agent.mu.Unlock()
+	agent.persistWG.Wait()
+	if sets, _ := f.snapshot(); len(sets) != 0 {
+		t.Fatalf("a released record must not be written: %v", sets)
+	}
+	if inflightLen(agent) != 0 {
+		t.Fatal("inflight must be empty")
+	}
 }

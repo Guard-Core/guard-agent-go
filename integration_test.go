@@ -219,12 +219,14 @@ func TestIntegrationDropEvictsPersistedRecord(t *testing.T) {
 	if err := agent.SendEvent(ctx, testEvent(1, "")); err != nil {
 		t.Fatalf("SendEvent 1: %v", err)
 	}
+	agent.persistWG.Wait() // the persist backlog is capped at BufferSize
 	if err := agent.SendEvent(ctx, testEvent(2, "")); err != nil {
 		t.Fatalf("SendEvent 2: %v", err)
 	}
 	if got := agent.Stats().EventsDropped; got != 1 {
 		t.Fatalf("dropped got %d want 1", got)
 	}
+	agent.persistWG.Wait()
 	waitUntil(t, 2*time.Second, "the evicted record must be deleted so it cannot resurrect", func() bool {
 		return len(testKeys(t, client)) == 1
 	})

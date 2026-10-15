@@ -171,6 +171,9 @@ type Agent struct {
 	// true once the record was flushed or evicted before the write landed,
 	// so the writer deletes the key instead of leaving an orphan.
 	inflight map[string]bool
+	// persistOverflowLogged limits the backlog warning to one per episode;
+	// it resets when inflight empties.
+	persistOverflowLogged bool
 }
 
 // New validates cfg (filling defaults), resolves the install id, and
@@ -682,9 +685,19 @@ func (a *Agent) reserveMetricKeyLocked(m SecurityMetric) string {
 // persistItemLocked assigns the record's key and starts the write on a
 // background goroutine tracked by persistWG. The WaitGroup Add happens
 // under a.mu, and Stop sets closed under a.mu before waiting, so Add can
-// never race Wait. After Stop the record is not persisted.
+// never race Wait. After Stop the record is not persisted. In-flight
+// writes are capped at BufferSize (shared by events and metrics): past it
+// the record stays in memory only and counts as a persist failure.
 func (a *Agent) persistItemLocked(namespace, kind string, data []byte) string {
 	if a.closed {
+		return ""
+	}
+	if len(a.inflight) >= a.cfg.BufferSize {
+		a.redisPersistFailures++
+		if !a.persistOverflowLogged {
+			a.persistOverflowLogged = true
+			a.logger.Printf("guardagent: Redis persist backlog at buffer_size=%d; buffering in memory only until it drains", a.cfg.BufferSize)
+		}
 		return ""
 	}
 	key := a.persist.fullKey(namespace, shortKey(kind))
@@ -700,19 +713,36 @@ func (a *Agent) persistItemLocked(namespace, kind string, data []byte) string {
 // persistWrite performs one Redis write off the lock. On failure the key
 // is forgotten (a later delete of a never-written key is harmless). On
 // success, if the record was flushed or evicted while the write was in
-// flight, the key is deleted instead of being left to TTL expiry.
+// flight, the key is deleted instead of being left to TTL expiry. A record
+// already flushed or evicted before the write starts is never written.
 func (a *Agent) persistWrite(key, value string) {
 	defer a.persistWG.Done()
+	a.mu.Lock()
+	if a.inflight[key] {
+		a.finishPersistLocked(key)
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
 	ok := a.persist.store(key, value)
 	a.mu.Lock()
 	released := a.inflight[key]
-	delete(a.inflight, key)
+	a.finishPersistLocked(key)
 	if !ok {
 		a.redisPersistFailures++
 	}
 	a.mu.Unlock()
 	if ok && released {
 		a.persist.del([]string{key})
+	}
+}
+
+// finishPersistLocked drops key from inflight; an empty backlog ends the
+// overflow episode so the next one warns again.
+func (a *Agent) finishPersistLocked(key string) {
+	delete(a.inflight, key)
+	if len(a.inflight) == 0 {
+		a.persistOverflowLogged = false
 	}
 }
 
