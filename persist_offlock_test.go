@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strconv"
 	"strings"
@@ -27,6 +29,10 @@ type fakeRedis struct {
 	order    []string
 	dels     []string
 	gateOnce sync.Once
+	// holdDel, when set before the agent connects, makes a DEL of that key
+	// block until delHold is closed (after delSeen reports it).
+	holdDel string
+	delHold chan struct{}
 }
 
 func newFakeRedis(t *testing.T, gated bool) *fakeRedis {
@@ -110,6 +116,9 @@ func (f *fakeRedis) serve(c net.Conn) {
 			f.mu.Unlock()
 			for _, k := range args[1:] {
 				f.delSeen <- k
+			}
+			if f.holdDel != "" && args[1] == f.holdDel {
+				<-f.delHold
 			}
 			_, _ = c.Write([]byte(":1\r\n"))
 		default:
@@ -354,14 +363,40 @@ func TestInflightPersistsNeverExceedBufferSize(t *testing.T) {
 
 func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
 	f := newFakeRedis(t, true)
+	// The ingest holds every flush until cleanup: otherwise the watermark
+	// flush can confirm a record before its write goroutine starts, the
+	// write is then skipped, and the backlog drops below BufferSize.
+	hold := make(chan struct{})
+	m := newMockIngest(t)
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hold
+		m.handle(w, r)
+	}))
+	t.Cleanup(ingest.Close)
 	var buf lockedBuffer
-	agent := newTestAgent(t, newMockIngest(t), func(c *Config) {
+	agent := newTestAgent(t, nil, func(c *Config) {
+		c.Endpoint = ingest.URL
 		c.Redis = &RedisConfig{URL: "redis://" + f.ln.Addr().String(), Prefix: "t", TTL: time.Minute}
 		c.BufferSize = 3
 	}, WithLogger(log.New(&buf, "", 0)))
+	t.Cleanup(func() { close(hold) })
 	ctx := context.Background()
 	warnings := func() int { return strings.Count(buf.String(), "persist backlog at buffer_size=3;") }
-	for i := 0; i < 5; i++ {
+	writesBlocked := func(n int) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			select {
+			case <-f.setSeen:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("only %d of %d writes reached Redis", i, n)
+			}
+		}
+	}
+	for i := 0; i < 3; i++ {
+		_ = agent.SendEvent(ctx, testEvent(i, ""))
+	}
+	writesBlocked(3)
+	for i := 3; i < 5; i++ {
 		_ = agent.SendEvent(ctx, testEvent(i, ""))
 	}
 	agent.mu.Lock()
@@ -381,7 +416,11 @@ func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
 
 	// A second episode saturates again and warns again.
 	f.rearm()
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 3; i++ {
+		_ = agent.SendMetric(ctx, testMetric(i))
+	}
+	writesBlocked(3)
+	for i := 3; i < 5; i++ {
 		_ = agent.SendMetric(ctx, testMetric(i))
 	}
 	if warnings() != 2 {
@@ -389,6 +428,39 @@ func TestPersistBacklogCountsAndWarnsOncePerEpisode(t *testing.T) {
 	}
 	f.release()
 	agent.persistWG.Wait()
+}
+
+func TestConfirmKeysDeletesDirectlyWhenTheQueueIsFull(t *testing.T) {
+	f := newFakeRedis(t, false)
+	f.holdDel, f.delHold = "t:busy", make(chan struct{})
+	agent := offLockAgent(t, f, newMockIngest(t), nil)
+	nextDel := func() string {
+		t.Helper()
+		select {
+		case k := <-f.delSeen:
+			return k
+		case <-time.After(5 * time.Second):
+			t.Fatal("no DEL reached Redis")
+			return ""
+		}
+	}
+	// The worker takes this confirmation and blocks inside its DEL, so the
+	// queue below fills without being drained.
+	agent.confirmKeys([]string{"t:busy"})
+	if k := nextDel(); k != "t:busy" {
+		t.Fatalf("worker DEL = %q", k)
+	}
+	for i := 0; i < cap(agent.confirmCh); i++ {
+		agent.confirmCh <- []string{"t:filler_" + strconv.Itoa(i)}
+	}
+	agent.confirmKeys([]string{"t:spill"})
+	if k := nextDel(); k != "t:spill" {
+		t.Fatalf("a full queue must delete directly, got DEL %q", k)
+	}
+	for len(agent.confirmCh) > 0 {
+		<-agent.confirmCh
+	}
+	close(f.delHold)
 }
 
 func TestRecordGoneBeforeWriteStartsIsNeverWritten(t *testing.T) {
