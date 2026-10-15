@@ -17,7 +17,7 @@ import (
 // Version is the semantic version of the guard-agent-go module. It is
 // reported to the ingestion API as agent_version and in the User-Agent
 // header. Releases are published as v-prefixed git tags.
-const Version = "3.2.3"
+const Version = "3.2.4"
 
 const guardCoreModule = "github.com/rennf93/guard-core-go/v4"
 
