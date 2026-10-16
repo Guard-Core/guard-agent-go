@@ -49,7 +49,7 @@ Key invariants an agent must preserve when editing:
 3. No exported method may panic out or block the host beyond the documented overflow policy; telemetry failures are logged and counted.
 4. Per-kind state (queues, failure streaks, backoff gates) stays independent: one kind failing must never stall the other.
 5. Redis failures are fail-open: log, count, keep going.
-6. Files under `.github/workflows/` are byte-identical to gin-guard's except the `MODULE` value in `release.yml`; do not diverge casually.
+6. Files under `.github/workflows/` are byte-identical to gin-guard's except the `MODULE` value and the `REQUIRED_WORKFLOWS` list in `release.yml` (no `live-smoke.yml` here); do not diverge casually.
 
 ## Quick Start
 
